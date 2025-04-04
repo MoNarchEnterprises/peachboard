@@ -103,7 +103,7 @@ const LoginPage: React.FC = () => {
           },
         }}
         providers={[]}
-        onlyThirdPartyProviders={true} // Explicitly disable all social providers
+        
       />
     </div>
   );

@@ -151,11 +151,11 @@ const DashboardPage: React.FC = () => {
             <BoardList>
               {boards.map((board) => (
                 <BoardListItem key={board.id}>
-                  <BoardLink to={`/board/${board.id}`}>
-                    {board.name}
-                  </BoardLink>
-                  {/* Optional: Add delete button or other actions here */}
-                </BoardListItem>
+                   {/* Simplified: Just the link to the board */}
+                   <BoardLink to={`/board/${board.id}`}>
+                     {board.name}
+                   </BoardLink>
+                 </BoardListItem>
               ))}
             </BoardList>
           )
@@ -269,13 +269,15 @@ const BoardListItem = styled.li`
     box-shadow: 0 3px 8px rgba(0,0,0,0.06);
   }
 `;
+// Removed BoardItemContent, ShareLinkContainer, ShareLinkInput, CopyButton
 
 const BoardLink = styled(Link)`
-  display: block;
-  padding: 15px 20px;
+  display: block; /* Make link take full width of list item */
+  padding: 15px 20px; /* Add padding back to the link */
   text-decoration: none;
   color: #333;
-  font-size: 16px;
+  font-size: 1.2em;
+  font-weight: 500;
 
   &:hover {
     color: #007bff; // Or your theme's link hover color

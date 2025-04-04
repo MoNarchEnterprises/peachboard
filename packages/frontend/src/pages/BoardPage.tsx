@@ -2,9 +2,10 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import styled from 'styled-components';
 import { supabase } from '../lib/supabaseClient';
+import type { RealtimeChannel } from '@supabase/supabase-js'; // Import type
 import { Stage, Layer, Line } from 'react-konva';
 import Konva from 'konva';
-import { FaPen, FaEraser } from 'react-icons/fa'; // Import icons
+import { FaPen, FaEraser, FaShareAlt } from 'react-icons/fa'; // Import icons + Share icon
 
 // Define an interface for the board object
 interface Board {
@@ -15,12 +16,23 @@ interface Board {
   share_link_id: string | null;
 }
 
-// Define an interface for a single line drawn
-interface DrawnLine {
+// Interface for line data stored in DB and state
+interface LineData {
+  id?: string; // Optional ID from DB
   points: number[];
   tool: 'pen' | 'eraser';
   color: string;
   strokeWidth: number;
+  creator_id?: string; // Optional creator ID
+}
+
+// Interface for the raw DB row
+interface BoardLineRow {
+  id: string;
+  board_id: string;
+  creator_id: string | null;
+  line_data: Omit<LineData, 'id' | 'creator_id'>; // The JSONB column itself
+  created_at: string;
 }
 
 // Styled Components
@@ -28,7 +40,7 @@ const BoardPageContainer = styled.div`
   display: flex;
   flex-direction: column;
   height: 100vh;
-  width: 100vw;
+  width: 100%; /* Use percentage instead of vw */
   margin: 0;
   padding: 0;
   overflow: hidden;
@@ -50,6 +62,23 @@ const BoardTitle = styled.h1`
   margin: 0;
 `;
 
+const NavButton = styled.button`
+  background: none;
+  border: none;
+  padding: 8px;
+  margin-left: 10px;
+  cursor: pointer;
+  color: #D2691E;
+  font-size: 1.2em;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+
+  &:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+    color: #A0522D;
+  }
+`;
+
 const DashboardLink = styled(Link)`
   text-decoration: none;
   color: #D2691E;
@@ -62,21 +91,28 @@ const DashboardLink = styled(Link)`
   }
 `;
 
+const TitleContainer = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 10px;
+`;
+
 const WhiteboardArea = styled.main`
   flex-grow: 1;
-  background-color: #ffffff; /* White background for canvas */
-  overflow: hidden; /* Hide overflow, stage handles scrolling/zooming if needed */
-  position: relative; /* Needed for absolute positioning of status messages if required */
+  background-color: #ffffff;
+  overflow: hidden;
+  position: relative;
+  width: 100%; /* Explicitly set width */
 `;
 
 const StatusMessage = styled.p<{ isError?: boolean }>`
-  position: absolute; /* Position message over the canvas area */
+  position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
   font-size: 1.2em;
   color: ${props => props.isError ? 'red' : '#555'};
-  background-color: rgba(255, 255, 255, 0.8); /* Semi-transparent background */
+  background-color: rgba(255, 255, 255, 0.8);
   padding: 10px 20px;
   border-radius: 5px;
   z-index: 10;
@@ -84,45 +120,19 @@ const StatusMessage = styled.p<{ isError?: boolean }>`
 
 const ToolBar = styled.div`
   padding: 8px 20px;
-  background-color: #FAFAD2; /* Light yellow background */
-  border-bottom: 1px solid #E6E6AA; /* Darker yellow border */
+  background-color: #FAFAD2;
+  border-bottom: 1px solid #E6E6AA;
   display: flex;
   align-items: center;
   gap: 15px;
-  flex-shrink: 0; /* Prevent toolbar from shrinking */
+  flex-shrink: 0;
 
-  label {
-    margin-right: 5px;
-    font-size: 0.9em;
-  }
-
-  input[type="color"] {
-    width: 40px;
-    height: 25px;
-    border: 1px solid #ccc;
-    padding: 0 2px;
-    cursor: pointer;
-  }
-
-  input[type="range"] {
-    cursor: pointer;
-  }
-
-  button {
-    padding: 5px 10px;
-    cursor: pointer;
-    border: 1px solid #ccc;
-    background-color: #fff; /* Default white background */
-    border-radius: 4px;
-    transition: background-color 0.2s, border-color 0.2s; /* Add transition */
-    &.active {
-      background-color: #98FB98; /* Light green for active */
-      border-color: #76c876; /* Darker green border for active */
-    }
-    &:hover:not(.active) { /* Add hover style for non-active buttons */
-       background-color: #f0f0f0;
-    }
-  }
+  label { margin-right: 5px; font-size: 0.9em; }
+  input[type="color"] { width: 40px; height: 25px; border: 1px solid #ccc; padding: 0 2px; cursor: pointer; }
+  input[type="range"] { cursor: pointer; }
+  button { padding: 5px 10px; cursor: pointer; border: 1px solid #ccc; background-color: #fff; border-radius: 4px; transition: background-color 0.2s, border-color 0.2s; }
+  button.active { background-color: #98FB98; border-color: #76c876; }
+  button:hover:not(.active) { background-color: #f0f0f0; }
 `;
 
 const ZoomControls = styled.div`
@@ -136,97 +146,127 @@ const ZoomControls = styled.div`
   display: flex;
   align-items: center;
   gap: 5px;
-  z-index: 5; /* Below status message, above canvas */
+  z-index: 5;
 
-  label {
-    font-size: 0.8em;
-  }
-
-  input {
-    width: 50px;
-    font-size: 0.8em;
-    padding: 2px 4px;
-    border: 1px solid #ccc;
-    border-radius: 3px;
-    text-align: right;
-  }
-
-  span {
-     font-size: 0.8em;
-     min-width: 10px; /* Prevent layout shift */
-  }
+  label { font-size: 0.8em; }
+  input { width: 50px; font-size: 0.8em; padding: 2px 4px; border: 1px solid #ccc; border-radius: 3px; text-align: right; }
+  span { font-size: 0.8em; min-width: 10px; }
 `;
 
 // Zoom limits
-const MIN_SCALE = 0.02; // 2%
-const MAX_SCALE = 8.0;  // 800%
+const MIN_SCALE = 0.02;
+const MAX_SCALE = 8.0;
 
-// BoardPage Component (Re-added React.FC type annotation)
-const BoardPage: React.FC = () => {
-  const { boardId } = useParams<{ boardId?: string }>();
+// Helper functions
+const getDistance = (p1: { x: number; y: number }, p2: { x: number; y: number }) => {
+  return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+};
+const getCenter = (p1: { x: number; y: number }, p2: { x: number; y: number }) => {
+  return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+};
+
+// BoardPage Component
+const BoardPage = () => { // No React.FC
+  // Get both potential params from the URL
+  const { boardId, shareLinkId } = useParams<{ boardId?: string, shareLinkId?: string }>();
   const [board, setBoard] = useState<Board | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Konva state
-  const [lines, setLines] = useState<DrawnLine[]>([]);
-  const lastDist = useRef(0); // For pinch zoom distance
-  const lastCenter = useRef<{ x: number; y: number } | null>(null); // For pinch zoom center
+  const [lines, setLines] = useState<LineData[]>([]); // Use LineData interface
+  const lastDist = useRef(0);
+  const lastCenter = useRef<{ x: number; y: number } | null>(null);
   const isDrawing = useRef(false);
   const stageRef = useRef<Konva.Stage>(null);
-  const containerRef = useRef<HTMLDivElement>(null); // Ref for the WhiteboardArea container
+  const containerRef = useRef<HTMLDivElement>(null);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [stageScale, setStageScale] = useState(1);
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
-  const [zoomInputValue, setZoomInputValue] = useState('100'); // Input field value as string %
+  const [zoomInputValue, setZoomInputValue] = useState('100');
 
   // Tool state
   const [tool, setTool] = useState<'pen' | 'eraser'>('pen');
-  const [strokeColor, setStrokeColor] = useState('#df4b26'); // Default color
-  const [strokeWidth, setStrokeWidth] = useState(5); // Default width
+  const [strokeColor, setStrokeColor] = useState('#df4b26');
+  const [strokeWidth, setStrokeWidth] = useState(5);
+
+  // --- Function to fetch initial lines ---
+  const fetchInitialLines = useCallback(async (currentBoardId: string) => { // Wrap in useCallback
+    console.log("Fetching initial lines for board:", currentBoardId);
+    try {
+      const { data, error: selectError } = await supabase
+        .from('board_lines')
+        .select('*')
+        .eq('board_id', currentBoardId);
+
+      if (selectError) throw selectError;
+
+      const initialLines = data?.map(line => ({
+        id: line.id,
+        creator_id: line.creator_id,
+        ...(line.line_data as Omit<LineData, 'id' | 'creator_id'>)
+      })) || [];
+
+      console.log("Fetched initial lines:", initialLines);
+      setLines(initialLines);
+
+    } catch (err: any) {
+      console.error("Error fetching initial lines:", err);
+      setError(prev => prev ? `${prev}\nFailed to fetch lines.` : 'Failed to fetch lines.');
+    }
+  }, []); // Empty dependency array for fetchInitialLines
 
   // --- Fetch Board Details Effect ---
   useEffect(() => {
     const fetchBoardDetails = async () => {
-       if (!boardId) {
-        setError('No board ID provided.');
-        setLoading(false);
-        return;
-      }
-
       setLoading(true);
       setError(null);
+      setBoard(null);
+      setLines([]); // Clear lines when fetching new board
+
       try {
-        const { data, error: fetchError } = await supabase
-          .from('peachboards')
-          .select('*')
-          .eq('id', boardId)
-          .single();
+        let query = supabase.from('peachboards').select('*');
+
+        if (shareLinkId) {
+          console.log("Fetching board by share link ID:", shareLinkId);
+          query = query.eq('share_link_id', shareLinkId);
+        } else if (boardId) {
+          console.log("Fetching board by board ID:", boardId);
+          query = query.eq('id', boardId);
+        } else {
+          setError('No board ID or share link ID provided.');
+          setLoading(false);
+          return;
+        }
+
+        const { data, error: fetchError } = await query.single();
 
         if (fetchError) {
           if (fetchError.code === 'PGRST116') {
-             setError(`Board not found or you don't have permission to view it.`);
+             setError(`Board not found or access denied.`);
           } else {
-            throw fetchError;
+            console.error('Supabase fetch error:', fetchError);
+            setError(`Error loading board: ${fetchError.message}`);
           }
+        } else if (data) {
+          console.log("Board data fetched:", data);
+          setBoard(data);
+          // Fetch lines after board is confirmed
+          fetchInitialLines(data.id);
+        } else {
+           setError(`Board not found.`);
         }
 
-        if (data) {
-          setBoard(data);
-          // TODO: Fetch existing lines for this board from Supabase
-        } else if (!fetchError) {
-           setError(`Board not found or you don't have permission to view it.`);
-        }
       } catch (err: any) {
         console.error('Error fetching board details:', err);
         setError(`Failed to load board: ${err.message || 'Unknown error'}`);
-        setBoard(null);
       } finally {
         setLoading(false);
       }
     };
+
     fetchBoardDetails();
-  }, [boardId]);
+  }, [boardId, shareLinkId, fetchInitialLines]); // Add fetchInitialLines to dependency array
 
  // --- Stage Resize Effect ---
  useEffect(() => {
@@ -248,50 +288,147 @@ useEffect(() => {
   setZoomInputValue(Math.round(stageScale * 100).toString());
 }, [stageScale]);
 
+  // --- Realtime Subscription Effect ---
+  useEffect(() => {
+    let channel: RealtimeChannel | null = null;
+
+    if (board?.id) {
+      const currentBoardId = board.id; // Capture board id for cleanup
+      console.log(`Subscribing to Realtime for board: ${currentBoardId}`);
+      channel = supabase
+        .channel(`board_${currentBoardId}`)
+        // Use the correct type for the payload row
+        .on<BoardLineRow>(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'board_lines',
+            filter: `board_id=eq.${currentBoardId}`,
+          },
+          (payload) => {
+            console.log('Realtime INSERT received:', payload);
+            const newLineRecord = payload.new; // This is now correctly typed as BoardLineRow | undefined
+
+            // Check if the record and its line_data exist and are objects
+            if (newLineRecord && typeof newLineRecord.line_data === 'object' && newLineRecord.line_data !== null) {
+               // Construct the LineData object for state
+               const newLine: LineData = {
+                 id: newLineRecord.id, // Get ID from the row
+                 creator_id: newLineRecord.creator_id ?? undefined, // Convert null to undefined
+                 ...newLineRecord.line_data // Spread the properties from the JSONB column
+               };
+               console.log("Adding line from Realtime:", newLine);
+
+               // Add line only if it doesn't already exist (simple check by id)
+               setLines((prevLines) => {
+                 if (!prevLines.some(line => line.id === newLine.id)) {
+                   return [...prevLines, newLine];
+                 }
+                 console.log("Duplicate line detected, skipping add:", newLine.id);
+                 return prevLines;
+               });
+            } else {
+              console.warn("Received Realtime insert without valid line_data:", payload);
+            }
+          }
+        )
+        .subscribe((status, err) => {
+           if (status === 'SUBSCRIBED') {
+             console.log(`Realtime subscribed for board: ${currentBoardId}`);
+           }
+           if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+             console.error(`Realtime subscription error: ${status}`, err);
+             setError(prev => prev ? `${prev}\nRealtime connection error.` : 'Realtime connection error.');
+           }
+         });
+    }
+
+    // Cleanup function
+    return () => {
+      if (channel) {
+        console.log(`Unsubscribing from Realtime for board: ${board?.id}`); // Use optional chaining here
+        supabase.removeChannel(channel).catch(err => console.error("Error removing channel", err));
+      }
+    };
+  }, [board]); // Re-subscribe if the board changes
+
+  // --- Function to save the last drawn line ---
+  const saveLineToDb = useCallback(async () => { // Make async
+    if (!board?.id) return;
+
+    const lastLine = lines[lines.length - 1];
+    // Check points length >= 4 because a line needs at least two points (x1,y1,x2,y2)
+    if (!lastLine || !lastLine.points || lastLine.points.length < 4) {
+       console.log("Skipping save for invalid line (dot or single point):", lastLine);
+       // Optionally remove the dot from local state if desired
+       // setLines(prev => prev.slice(0, -1));
+       return;
+    }
+
+    const lineDataToSave: Omit<LineData, 'id' | 'creator_id'> = {
+        points: lastLine.points,
+        tool: lastLine.tool,
+        color: lastLine.color,
+        strokeWidth: lastLine.strokeWidth,
+    };
+
+    console.log("Saving line to DB:", lineDataToSave);
+
+    try {
+        const { error: insertError } = await supabase
+            .from('board_lines')
+            .insert({
+                board_id: board.id,
+                line_data: lineDataToSave,
+            });
+
+        if (insertError) throw insertError;
+
+        console.log("Line saved successfully.");
+        // Note: Realtime should add the line back with an ID.
+        // If duplicates appear, we might need more robust handling in the subscription callback.
+
+    } catch (err: any) {
+        console.error("Error saving line:", err);
+        setError(prev => prev ? `${prev}\nFailed to save drawing.` : 'Failed to save drawing.');
+    }
+  }, [board, lines]); // Depend on board and lines
+
   // --- Konva Event Handlers (wrapped in useCallback) ---
   const handleMouseDown = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
     isDrawing.current = true;
     const stage = e.target.getStage();
     if (!stage) return;
-    // Use getRelativePointerPosition for drawing relative to stage scale/pos
     const pos = stage.getRelativePointerPosition();
     if (!pos) return;
-    // Start a new line using the current state
-    // Start a new line with current tool settings
     setLines((prevLines) => [
       ...prevLines,
       { points: [pos.x, pos.y], tool, color: strokeColor, strokeWidth },
     ]);
-     // TODO: Send new line start event via Supabase Realtime
-  }, [tool, strokeColor, strokeWidth]); // Add dependencies
+  }, [tool, strokeColor, strokeWidth]);
 
   const handleMouseMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-    if (!isDrawing.current) {
-      return;
-    }
+    if (!isDrawing.current) return;
     const stage = e.target.getStage();
     if (!stage) return;
     const point = stage.getRelativePointerPosition();
     if (!point) return;
-
-    // Update the last line using the functional form of setLines
     setLines((prevLines) => {
       const lastLine = prevLines[prevLines.length - 1];
       if (lastLine) {
-        // Add new points to the current line
         lastLine.points = lastLine.points.concat([point.x, point.y]);
-        // Return a new array with the updated last line
         return [...prevLines.slice(0, -1), lastLine];
       }
-      return prevLines; // Should not happen if mouseDown worked
+      return prevLines;
     });
-     // TODO: Send line update event via Supabase Realtime (throttle this)
-  }, []); // Dependency array is empty
+  }, []);
 
   const handleMouseUp = useCallback(() => {
+    if (!isDrawing.current) return; // Only save if we were actually drawing
     isDrawing.current = false;
-     // TODO: Send line end event via Supabase Realtime / save final line state
-  }, []); // Dependency array is empty
+    saveLineToDb(); // Save the completed line
+  }, [saveLineToDb]); // Depend on saveLineToDb
 
   // --- Touch Event Handlers (wrapped in useCallback) ---
   const handleTouchStart = useCallback((e: Konva.KonvaEventObject<TouchEvent>) => {
@@ -301,7 +438,6 @@ useEffect(() => {
     if (!stage) return;
 
     if (touches.length === 1) {
-      // Start drawing
       isDrawing.current = true;
       const pos = stage.getRelativePointerPosition();
       if (!pos) return;
@@ -309,10 +445,8 @@ useEffect(() => {
         ...prevLines,
         { points: [pos.x, pos.y], tool, color: strokeColor, strokeWidth },
       ]);
-      // TODO: Send new line start event
     } else if (touches.length >= 2) {
-      // Start pinch zoom
-      isDrawing.current = false; // Stop drawing if starting pinch
+      isDrawing.current = false;
       const touch1 = touches[0];
       const touch2 = touches[1];
       lastDist.current = getDistance(
@@ -326,19 +460,6 @@ useEffect(() => {
     }
   }, [tool, strokeColor, strokeWidth]);
 
-  // Helper function to calculate distance between two points
-  const getDistance = (p1: { x: number; y: number }, p2: { x: number; y: number }) => {
-    return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
-  };
-
-  // Helper function to calculate center between two points
-  const getCenter = (p1: { x: number; y: number }, p2: { x: number; y: number }) => {
-    return {
-      x: (p1.x + p2.x) / 2,
-      y: (p1.y + p2.y) / 2,
-    };
-  };
-
 
   const handleTouchMove = useCallback((e: Konva.KonvaEventObject<TouchEvent>) => {
     e.evt.preventDefault();
@@ -347,7 +468,6 @@ useEffect(() => {
      if (!stage) return;
 
     if (touches.length === 1 && isDrawing.current) {
-      // Continue drawing
       const point = stage.getRelativePointerPosition();
       if (!point) return;
       setLines((prevLines) => {
@@ -358,10 +478,8 @@ useEffect(() => {
         }
         return prevLines;
       });
-      // TODO: Send line update event
     } else if (touches.length >= 2 && lastCenter.current) {
-       // Handle pinch zoom
-       isDrawing.current = false; // Ensure drawing stops during pinch
+       isDrawing.current = false;
        const touch1 = touches[0];
        const touch2 = touches[1];
        const newCenter = getCenter(
@@ -374,14 +492,13 @@ useEffect(() => {
        );
 
        if (lastDist.current === 0) {
-         lastDist.current = newDist; // Avoid division by zero on first move
+         lastDist.current = newDist;
          return;
        }
 
        let scale = stage.scaleX() * (newDist / lastDist.current);
-       scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale)); // Clamp scale
+       scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
 
-       // Calculate new position to keep center fixed
        const dx = newCenter.x - lastCenter.current.x;
        const dy = newCenter.y - lastCenter.current.y;
 
@@ -396,24 +513,46 @@ useEffect(() => {
        lastDist.current = newDist;
        lastCenter.current = newCenter;
     }
-  }, [stageScale]); // Add stageScale dependency
+  }, [stageScale]);
 
   const handleTouchEnd = useCallback((e: Konva.KonvaEventObject<TouchEvent>) => {
     e.evt.preventDefault();
+    const wasDrawing = isDrawing.current; // Check if we were drawing before resetting
     isDrawing.current = false;
-    lastDist.current = 0; // Reset pinch distance
-    lastCenter.current = null; // Reset pinch center
-    // TODO: Send line end event if a line was being drawn before pinch/end
-  }, []);
+    lastDist.current = 0;
+    lastCenter.current = null;
+    if (wasDrawing) { // Only save if the touch end corresponds to a drawing action
+       saveLineToDb();
+    }
+  }, [saveLineToDb]); // Depend on saveLineToDb
+
+  // --- Share Button Handler ---
+  const handleShareClick = useCallback(() => {
+    if (board && board.share_link_id) {
+      const shareUrl = `${window.location.origin}/share/${board.share_link_id}`;
+      navigator.clipboard.writeText(shareUrl)
+        .then(() => {
+          console.log('Share link copied to clipboard:', shareUrl);
+          alert('Share link copied to clipboard!');
+        })
+        .catch(err => {
+          console.error('Failed to copy share link:', err);
+          alert('Failed to copy share link.');
+        });
+    } else {
+      console.warn('Cannot share: Board data or share link ID is missing.');
+      alert('Cannot generate share link.');
+    }
+  }, [board]);
 
   // --- Zoom Handler ---
   const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
-    e.evt.preventDefault(); // Prevent page scrolling
+    e.evt.preventDefault();
 
     const stage = e.target.getStage();
     if (!stage) return;
 
-    const scaleBy = 1.05; // Zoom factor
+    const scaleBy = 1.05;
     const oldScale = stage.scaleX();
     const pointer = stage.getPointerPosition();
 
@@ -424,48 +563,40 @@ useEffect(() => {
       y: (pointer.y - stage.y()) / oldScale,
     };
 
-    // Determine new scale based on scroll direction
-    let direction = e.evt.deltaY > 0 ? -1 : 1; // -1 for zoom out, 1 for zoom in
-
-    // Apply zoom limits if desired (e.g., min 0.1, max 10)
-    // if (e.evt.ctrlKey) { direction = -direction; } // Optional: Reverse direction with Ctrl
+    let direction = e.evt.deltaY > 0 ? -1 : 1;
 
     let newScale = direction > 0 ? oldScale * scaleBy : oldScale / scaleBy;
-
-    // Apply scale limits
     newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
 
-    setStageScale(newScale); // Update scale state
+    setStageScale(newScale);
 
     const newPos = {
       x: pointer.x - mousePointTo.x * newScale,
       y: pointer.y - mousePointTo.y * newScale,
     };
-    setStagePos(newPos); // Update position state
+    setStagePos(newPos);
 
   }, []);
 
   // --- Zoom Input Handler ---
   const handleZoomInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
-    setZoomInputValue(value); // Update input field immediately
+    setZoomInputValue(value);
 
     const percentage = parseFloat(value);
     if (!isNaN(percentage) && percentage > 0) {
       let newScale = percentage / 100;
-      // Apply scale limits
       newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
 
       const stage = stageRef.current;
       if (!stage) return;
 
-      // Calculate new position to keep center fixed
       const center = {
         x: stageSize.width / 2,
         y: stageSize.height / 2,
       };
 
-      const oldScale = stageScale; // Use state value
+      const oldScale = stageScale;
 
       const mousePointTo = {
         x: (center.x - stagePos.x) / oldScale,
@@ -482,162 +613,116 @@ useEffect(() => {
     }
   };
 
+  // --- Render Logic ---
+  let whiteboardContent;
+  if (loading) {
+    whiteboardContent = <StatusMessage>Loading board...</StatusMessage>;
+  } else if (error) {
+    whiteboardContent = <StatusMessage isError={true}>{error}</StatusMessage>;
+  } else if (board) {
+    whiteboardContent = (
+      <Stage
+        width={stageSize.width}
+        height={stageSize.height}
+        onMouseDown={handleMouseDown}
+        onMousemove={handleMouseMove}
+        onMouseup={handleMouseUp}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        ref={stageRef}
+        onWheel={handleWheel}
+        scaleX={stageScale}
+        scaleY={stageScale}
+        x={stagePos.x}
+        y={stagePos.y}
+      >
+        {/* Grid Layer */}
+        <Layer listening={false}>
+          {(() => {
+            if (!stageSize.width || !stageSize.height) return null;
+            const gridSpacing = 20;
+            const gridLineColor = '#e0f2f7';
+            const gridLineWidth = 0.5;
+            const majorGridLineColor = '#b3e5fc';
+            const majorGridLineWidth = 1;
+            const majorGridInterval = 5;
+            const gridLines = [];
+            const topLeftX = -stagePos.x / stageScale;
+            const topLeftY = -stagePos.y / stageScale;
+            const bottomRightX = (-stagePos.x + stageSize.width) / stageScale;
+            const bottomRightY = (-stagePos.y + stageSize.height) / stageScale;
+            const startXIndex = Math.floor(topLeftX / gridSpacing);
+            const endXIndex = Math.ceil(bottomRightX / gridSpacing);
+            const startYIndex = Math.floor(topLeftY / gridSpacing);
+            const endYIndex = Math.ceil(bottomRightY / gridSpacing);
+            for (let i = startXIndex; i <= endXIndex; i++) {
+              const isMajor = i % majorGridInterval === 0;
+              const x = Math.round(i * gridSpacing) + 0.5;
+              gridLines.push(
+                <Line key={`v-${i}`} points={[x, topLeftY, x, bottomRightY]} stroke={isMajor ? majorGridLineColor : gridLineColor} strokeWidth={isMajor ? majorGridLineWidth : gridLineWidth} />
+              );
+            }
+            for (let j = startYIndex; j <= endYIndex; j++) {
+               const isMajor = j % majorGridInterval === 0;
+               const y = Math.round(j * gridSpacing) + 0.5;
+               gridLines.push(
+                <Line key={`h-${j}`} points={[topLeftX, y, bottomRightX, y]} stroke={isMajor ? majorGridLineColor : gridLineColor} strokeWidth={isMajor ? majorGridLineWidth : gridLineWidth} />
+              );
+            }
+            return gridLines;
+          })()}
+        </Layer>
+        {/* Drawing Layer */}
+        <Layer>
+          {lines.map((line, i) => (
+            <Line
+              key={`line-${i}`}
+              points={line.points}
+              stroke={line.color}
+              strokeWidth={line.strokeWidth}
+              tension={0.5}
+              lineCap="round"
+              lineJoin="round"
+              globalCompositeOperation={ line.tool === 'eraser' ? 'destination-out' : 'source-over' }
+            />
+          ))}
+        </Layer>
+      </Stage>
+    );
+  } else {
+    whiteboardContent = <StatusMessage>Board details could not be loaded.</StatusMessage>;
+  }
+
+
   return (
     <BoardPageContainer>
       <TopNavBar>
-        <BoardTitle>{board ? board.name : 'PeachBoard'}</BoardTitle>
+         <TitleContainer>
+           <BoardTitle>{board ? board.name : 'PeachBoard'}</BoardTitle>
+           {board && board.share_link_id && (
+             <NavButton onClick={handleShareClick} title="Copy Share Link">
+               <FaShareAlt />
+             </NavButton>
+           )}
+         </TitleContainer>
         <DashboardLink to="/dashboard">Back to Dashboard</DashboardLink>
       </TopNavBar>
       <ToolBar>
         <label htmlFor="tool-pen">Tool:</label>
-        <button
-          id="tool-pen"
-          onClick={() => setTool('pen')}
-          className={tool === 'pen' ? 'active' : ''}
-          title="Pen" // Add title for accessibility/tooltip
-        >
-          <FaPen /> {/* Use Pen icon */}
-        </button>
-        <button
-          id="tool-eraser"
-          onClick={() => setTool('eraser')}
-          className={tool === 'eraser' ? 'active' : ''}
-          title="Eraser" // Add title for accessibility/tooltip
-        >
-          <FaEraser /> {/* Use Eraser icon */}
-        </button>
+        <button id="tool-pen" onClick={() => setTool('pen')} className={tool === 'pen' ? 'active' : ''} title="Pen" > <FaPen /> </button>
+        <button id="tool-eraser" onClick={() => setTool('eraser')} className={tool === 'eraser' ? 'active' : ''} title="Eraser" > <FaEraser /> </button>
         <label htmlFor="color-picker">Color:</label>
-        <input
-          type="color"
-          id="color-picker"
-          value={strokeColor}
-          onChange={(e) => setStrokeColor(e.target.value)}
-          disabled={tool === 'eraser'} // Disable color for eraser
-        />
+        <input type="color" id="color-picker" value={strokeColor} onChange={(e) => setStrokeColor(e.target.value)} disabled={tool === 'eraser'} />
         <label htmlFor="stroke-width">Width:</label>
-        <input
-          type="range"
-          id="stroke-width"
-          min="1"
-          max="50" // Adjust max width as needed
-          value={strokeWidth}
-          onChange={(e) => setStrokeWidth(parseInt(e.target.value, 10))}
-        />
-        <span>{strokeWidth}</span> {/* Display current width */}
-      </ToolBar> {/* Correct closing tag placement */}
-      {/* Assign ref to the container */}
+        <input type="range" id="stroke-width" min="1" max="50" value={strokeWidth} onChange={(e) => setStrokeWidth(parseInt(e.target.value, 10))} />
+        <span>{strokeWidth}</span>
+      </ToolBar>
       <WhiteboardArea ref={containerRef}>
-        {loading && <StatusMessage>Loading board...</StatusMessage>}
-        {error && <StatusMessage isError={true}>{error}</StatusMessage>}
-        {!loading && !error && board && (
-          <Stage
-            width={stageSize.width}
-            height={stageSize.height}
-            onMouseDown={handleMouseDown}
-            onMousemove={handleMouseMove}
-            onMouseup={handleMouseUp}
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
-            ref={stageRef}
-            onWheel={handleWheel} // Add wheel handler
-            scaleX={stageScale}   // Apply scale state
-            scaleY={stageScale}
-            x={stagePos.x}        // Apply position state
-            y={stagePos.y}
-          >
-            {/* Grid Layer (rendered first, underneath drawing) */}
-            <Layer listening={false}>
-              {(() => {
-                // Prevent rendering grid if stage size is not yet determined
-                if (!stageSize.width || !stageSize.height) {
-                  return null;
-                }
-
-                const gridSpacing = 20;
-                const gridLineColor = '#e0f2f7';
-                const gridLineWidth = 0.5;
-                const majorGridLineColor = '#b3e5fc';
-                const majorGridLineWidth = 1;
-                const majorGridInterval = 5;
-                const gridLines = []; // Renamed from lines to avoid conflict
-
-                // Calculate visible bounds in stage coordinates
-                const topLeftX = -stagePos.x / stageScale;
-                const topLeftY = -stagePos.y / stageScale;
-                const bottomRightX = (-stagePos.x + stageSize.width) / stageScale;
-                const bottomRightY = (-stagePos.y + stageSize.height) / stageScale;
-
-                // Calculate start and end indices for loops based on visible area
-                const startXIndex = Math.floor(topLeftX / gridSpacing);
-                const endXIndex = Math.ceil(bottomRightX / gridSpacing);
-                const startYIndex = Math.floor(topLeftY / gridSpacing);
-                const endYIndex = Math.ceil(bottomRightY / gridSpacing);
-
-                // Vertical lines
-                for (let i = startXIndex; i <= endXIndex; i++) {
-                  const isMajor = i % majorGridInterval === 0;
-                  const x = Math.round(i * gridSpacing) + 0.5;
-                  gridLines.push(
-                    <Line
-                      key={`v-${i}`}
-                      points={[x, topLeftY, x, bottomRightY]} // Draw across visible height
-                      stroke={isMajor ? majorGridLineColor : gridLineColor}
-                      strokeWidth={isMajor ? majorGridLineWidth : gridLineWidth}
-                    />
-                  );
-                }
-
-                // Horizontal lines
-                for (let j = startYIndex; j <= endYIndex; j++) {
-                   const isMajor = j % majorGridInterval === 0;
-                   const y = Math.round(j * gridSpacing) + 0.5;
-                   gridLines.push(
-                    <Line
-                      key={`h-${j}`}
-                      points={[topLeftX, y, bottomRightX, y]} // Draw across visible width
-                      stroke={isMajor ? majorGridLineColor : gridLineColor}
-                      strokeWidth={isMajor ? majorGridLineWidth : gridLineWidth}
-                    />
-                  );
-                }
-                return gridLines;
-              })()}
-            </Layer>
-
-            {/* Drawing Layer */}
-            <Layer>
-              {/* Render all drawn lines */}
-              {lines.map((line, i) => (
-                <Line
-                  key={`line-${i}`} // Use a more specific key prefix
-                  points={line.points}
-                  stroke={line.color}
-                  strokeWidth={line.strokeWidth}
-                  tension={0.5}
-                  lineCap="round"
-                  lineJoin="round"
-                  globalCompositeOperation={
-                    line.tool === 'eraser' ? 'destination-out' : 'source-over'
-                  }
-                />
-              ))}
-            </Layer>
-          </Stage>
-        )}
-         {!loading && !error && !board && (
-           <StatusMessage>Board details could not be loaded.</StatusMessage>
-         )}
-         {/* Zoom Controls UI */}
+        {whiteboardContent}
          <ZoomControls>
             <label htmlFor="zoom-input">Zoom:</label>
-            <input
-              type="number"
-              id="zoom-input"
-              value={zoomInputValue}
-              onChange={handleZoomInputChange}
-              step="10" // Optional: step value for spinner arrows
-            />
+            <input type="number" id="zoom-input" value={zoomInputValue} onChange={handleZoomInputChange} step="10" />
             <span>%</span>
          </ZoomControls>
       </WhiteboardArea>

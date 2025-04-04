@@ -8,6 +8,7 @@ import './App.css'; // Keep existing App CSS if needed
 // TODO: Implement proper authentication check for protected routes
 
 const App: React.FC = () => {
+  console.log("App component rendering..."); // Add console log
   return (
     <Router>
       <Routes>
@@ -16,6 +17,8 @@ const App: React.FC = () => {
         <Route path="/dashboard" element={<DashboardPage />} />
         {/* TODO: Protect board route */}
         <Route path="/board/:boardId" element={<BoardPage />} />
+        {/* Route for accessing board via share link */}
+        <Route path="/share/:shareLinkId" element={<BoardPage />} />
         {/* Redirect root path to login for now */}
         <Route path="/" element={<Navigate replace to="/login" />} />
         {/* Optional: Add a 404 Not Found route */}

@@ -178,6 +178,8 @@ const BoardPage = () => { // No React.FC
   const lastDist = useRef(0);
   const lastCenter = useRef<{ x: number; y: number } | null>(null);
   const isDrawing = useRef(false);
+  const isPanning = useRef(false); // Ref to track panning state
+  const panStartPoint = useRef<{ x: number; y: number } | null>(null); // Ref for pan start coords
   const stageRef = useRef<Konva.Stage>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
@@ -414,13 +416,19 @@ useEffect(() => {
     if (!stage) return;
     const point = stage.getRelativePointerPosition();
     if (!point) return;
+    // Update state immutably
     setLines((prevLines) => {
       const lastLine = prevLines[prevLines.length - 1];
-      if (lastLine) {
-        lastLine.points = lastLine.points.concat([point.x, point.y]);
-        return [...prevLines.slice(0, -1), lastLine];
+      // Ensure lastLine exists before creating a new object
+      if (lastLine?.points) { // Check points specifically
+        // Create a new line object with the updated points array
+        const updatedLine = {
+          ...lastLine,
+          points: lastLine.points.concat([point.x, point.y]),
+        };
+        return [...prevLines.slice(0, -1), updatedLine]; // Replace last line with updated one
       }
-      return prevLines;
+      return prevLines; // Should not happen if drawing started correctly
     });
   }, []);
 
@@ -470,13 +478,19 @@ useEffect(() => {
     if (touches.length === 1 && isDrawing.current) {
       const point = stage.getRelativePointerPosition();
       if (!point) return;
+      // Update state immutably
       setLines((prevLines) => {
         const lastLine = prevLines[prevLines.length - 1];
-        if (lastLine) {
-          lastLine.points = lastLine.points.concat([point.x, point.y]);
-          return [...prevLines.slice(0, -1), lastLine];
+        // Ensure lastLine exists before creating a new object
+        if (lastLine?.points) { // Check points specifically
+           // Create a new line object with the updated points array
+           const updatedLine = {
+             ...lastLine,
+             points: lastLine.points.concat([point.x, point.y]),
+           };
+           return [...prevLines.slice(0, -1), updatedLine]; // Replace last line with updated one
         }
-        return prevLines;
+        return prevLines; // Should not happen if drawing started correctly
       });
     } else if (touches.length >= 2 && lastCenter.current) {
        isDrawing.current = false;

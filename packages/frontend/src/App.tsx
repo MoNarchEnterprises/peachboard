@@ -3,7 +3,8 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import BoardPage from './pages/BoardPage';
-import './App.css'; // Keep existing App CSS if needed
+import ProtectedRoute from './components/ProtectedRoute'; // Import ProtectedRoute
+import './App.css';
 
 // TODO: Implement proper authentication check for protected routes
 
@@ -12,15 +13,20 @@ const App: React.FC = () => {
   return (
     <Router>
       <Routes>
+        {/* Public route */}
         <Route path="/login" element={<LoginPage />} />
-        {/* TODO: Protect dashboard route */}
-        <Route path="/dashboard" element={<DashboardPage />} />
-        {/* TODO: Protect board route */}
-        <Route path="/board/:boardId" element={<BoardPage />} />
-        {/* Route for accessing board via share link */}
-        <Route path="/share/:shareLinkId" element={<BoardPage />} />
-        {/* Redirect root path to login for now */}
-        <Route path="/" element={<Navigate replace to="/login" />} />
+
+        {/* Protected Routes */}
+        <Route element={<ProtectedRoute />}>
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/board/:boardId" element={<BoardPage />} />
+          <Route path="/share/:shareLinkId" element={<BoardPage />} />
+          {/* Add other protected routes here */}
+        </Route>
+
+        {/* Redirect root path to login (or dashboard if logged in - handled by ProtectedRoute logic) */}
+        {/* Consider a more sophisticated root path handling later */}
+        <Route path="/" element={<Navigate replace to="/dashboard" />} />
         {/* Optional: Add a 404 Not Found route */}
         {/* <Route path="*" element={<NotFoundPage />} /> */}
       </Routes>

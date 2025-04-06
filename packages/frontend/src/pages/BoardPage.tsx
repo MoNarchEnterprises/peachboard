@@ -105,13 +105,13 @@ const WhiteboardArea = styled.main`
   width: 100%; /* Explicitly set width */
 `;
 
-const StatusMessage = styled.p<{ isError?: boolean }>`
+const StatusMessage = styled.p<{ $isError?: boolean }>` // Prefix prop with $
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
   font-size: 1.2em;
-  color: ${props => props.isError ? 'red' : '#555'};
+  color: ${props => props.$isError ? 'red' : '#555'}; // Use $isError in style logic
   background-color: rgba(255, 255, 255, 0.8);
   padding: 10px 20px;
   border-radius: 5px;
@@ -399,43 +399,65 @@ useEffect(() => {
 
   // --- Konva Event Handlers (wrapped in useCallback) ---
   const handleMouseDown = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-    isDrawing.current = true;
-    const stage = e.target.getStage();
-    if (!stage) return;
-    const pos = stage.getRelativePointerPosition();
-    if (!pos) return;
-    setLines((prevLines) => [
-      ...prevLines,
-      { points: [pos.x, pos.y], tool, color: strokeColor, strokeWidth },
-    ]);
-  }, [tool, strokeColor, strokeWidth]);
+    const stage = e.target.getStage(); if (!stage) return;
+
+    // Check mouse button: 0 = left, 1 = middle, 2 = right
+    if (e.evt.button === 1) { // Middle mouse button (wheel click) for panning
+      isDrawing.current = false; // Ensure not drawing
+      isPanning.current = true;
+      panStartPoint.current = stage.getPointerPosition(); // Use absolute position
+      e.evt.preventDefault(); // Prevent default middle-click actions (like auto-scroll)
+    } else if (e.evt.button === 0) { // Left mouse button for drawing
+      isPanning.current = false; // Ensure not panning
+      isDrawing.current = true;
+      const pos = stage.getRelativePointerPosition(); if (!pos) return;
+      setLines((prevLines) => [...prevLines, { points: [pos.x, pos.y], tool, color: strokeColor, strokeWidth }]);
+    }
+    // Ignore right-click (button 2) for now, or add context menu logic later
+  }, [tool, strokeColor, strokeWidth]); // Dependencies for drawing part
 
   const handleMouseMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-    if (!isDrawing.current) return;
+    if (!isDrawing.current && !isPanning.current) return;
     const stage = e.target.getStage();
     if (!stage) return;
     const point = stage.getRelativePointerPosition();
     if (!point) return;
     // Update state immutably
-    setLines((prevLines) => {
-      const lastLine = prevLines[prevLines.length - 1];
-      // Ensure lastLine exists before creating a new object
-      if (lastLine?.points) { // Check points specifically
-        // Create a new line object with the updated points array
-        const updatedLine = {
-          ...lastLine,
-          points: lastLine.points.concat([point.x, point.y]),
-        };
-        return [...prevLines.slice(0, -1), updatedLine]; // Replace last line with updated one
+    if(isDrawing.current){
+      setLines((prevLines) => {
+        const lastLine = prevLines[prevLines.length - 1];
+        // Ensure lastLine exists before creating a new object
+        if (lastLine?.points) { // Check points specifically
+          // Create a new line object with the updated points array
+          const updatedLine = {
+            ...lastLine,
+            points: lastLine.points.concat([point.x, point.y]),
+          };
+          return [...prevLines.slice(0, -1), updatedLine]; // Replace last line with updated one
+        }
+        return prevLines; // Should not happen if drawing started correctly
+      });
+    }
+    if(isPanning.current && panStartPoint.current){
+      const dx = point.x - panStartPoint.current.x;
+      const dy = point.y - panStartPoint.current.y;
+      const newPos ={
+        x: point.x - (point.x - stage.x() - dx),
+        y: point.y - (point.y - stage.y() - dy),
       }
-      return prevLines; // Should not happen if drawing started correctly
-    });
+      setStagePos(newPos);
+    }
   }, []);
 
   const handleMouseUp = useCallback(() => {
-    if (!isDrawing.current) return; // Only save if we were actually drawing
-    isDrawing.current = false;
-    saveLineToDb(); // Save the completed line
+    if(!isDrawing.current && !isPanning.current) return; // Only save if we were actually drawing
+    if (isDrawing.current){
+      isDrawing.current = false;
+      saveLineToDb(); // Save the completed line
+    }
+    else if (isPanning.current){
+      isPanning.current = false;
+    }
   }, [saveLineToDb]); // Depend on saveLineToDb
 
   // --- Touch Event Handlers (wrapped in useCallback) ---

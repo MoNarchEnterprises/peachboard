@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabaseClient'; // Use shared client
 interface AuthContextType {
   session: Session | null;
   user: User | null;
+  //figure out how to properly add profile
   loading: boolean;
 }
 

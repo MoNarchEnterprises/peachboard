@@ -5,7 +5,8 @@ import { supabase } from '../lib/supabaseClient';
 import type { RealtimeChannel } from '@supabase/supabase-js'; // Import type
 import { Stage, Layer, Line, Rect } from 'react-konva';
 import Konva from 'konva';
-import { FaPen, FaEraser, FaShareAlt } from 'react-icons/fa'; // Import icons + Share icon
+import { FaPen, FaEraser, FaShareAlt, FaBox, FaShapes, FaSquare } from 'react-icons/fa'; // Import icons + Share icon
+import { FaRectangleAd } from 'react-icons/fa6';
 
 // Define an interface for the board object
 interface Board {
@@ -16,7 +17,7 @@ interface Board {
   share_link_id: string | null;
 }
 
-type Tool = 'pen' | 'eraser' | 'rectangle';
+type Tool = 'pen' | 'rectangle'| 'eraser' ;
 
 // Base interface for all drawing elements on the PeachBoard
 interface BoardElementBase {
@@ -207,11 +208,11 @@ const BoardPage = () => { // No React.FC
   const [zoomInputValue, setZoomInputValue] = useState('100');
 
   // Tool state
-  const [tool, setTool] = useState<'pen' | 'eraser'>('pen');
+  const [tool, setTool] = useState<'pen' | 'rectangle' | 'eraser'>('pen');
   const [strokeColor, setStrokeColor] = useState('#df4b26');
   const [strokeWidth, setStrokeWidth] = useState(5);
 
-  // --- Function to fetch initial lines ---
+  // --- Function to fetch initial elements ---
   const fetchInitialElements = useCallback(async (currentBoardId: string) => { // Wrap in useCallback
     console.log("Fetching initial elements for board:", currentBoardId);
     try {
@@ -476,7 +477,7 @@ useEffect(() => {
         if (!currentElement) return prevElements;
 
         if (currentElement.tool === 'pen' || currentElement.tool === 'eraser') {
-          const updatedElement = { ...currentElement, points: currentElement.points.concat([pos.x, pos.y]) };
+          const updatedElement = { ...currentElement, points: currentElement.points.concat([point.x, point.y]) };
           return [...prevElements.slice(0, -1), updatedElement];
         } else if (currentElement.tool === 'rectangle' && drawingStartPoint.current) {
           const updatedElement = {
@@ -804,6 +805,7 @@ useEffect(() => {
       <ToolBar>
         <label htmlFor="tool-pen">Tool:</label>
         <button id="tool-pen" onClick={() => setTool('pen')} className={tool === 'pen' ? 'active' : ''} title="Pen" > <FaPen /> </button>
+        <button id="tool-rectangle" onClick={() => setTool('rectangle')} className={tool === 'rectangle'?'active':''} title="Rectangle"><FaSquare /></button>
         <button id="tool-eraser" onClick={() => setTool('eraser')} className={tool === 'eraser' ? 'active' : ''} title="Eraser" > <FaEraser /> </button>
         <label htmlFor="color-picker">Color:</label>
         <input type="color" id="color-picker" value={strokeColor} onChange={(e) => setStrokeColor(e.target.value)} disabled={tool === 'eraser'} />

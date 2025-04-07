@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import styled from 'styled-components';
 import { supabase } from '../lib/supabaseClient';
 import type { RealtimeChannel } from '@supabase/supabase-js'; // Import type
-import { Stage, Layer, Line } from 'react-konva';
+import { Stage, Layer, Line, Rect } from 'react-konva';
 import Konva from 'konva';
 import { FaPen, FaEraser, FaShareAlt } from 'react-icons/fa'; // Import icons + Share icon
 
@@ -16,22 +16,40 @@ interface Board {
   share_link_id: string | null;
 }
 
-// Interface for line data stored in DB and state
-interface LineData {
-  id?: string; // Optional ID from DB
-  points: number[];
-  tool: 'pen' | 'eraser';
+type Tool = 'pen' | 'eraser' | 'rectangle';
+
+// Base interface for all drawing elements on the PeachBoard
+interface BoardElementBase {
+  id?: string;
+  tool: Tool;
   color: string;
   strokeWidth: number;
-  creator_id?: string; // Optional creator ID
+  creator_id?: string | null;
 }
 
+// Interface for line data stored in DB and state
+interface LineElement extends BoardElementBase {
+  tool: 'pen' | 'eraser';
+  points: number[];
+}
+
+// Interface for the rect data stored in DB and state
+interface RectangleElement extends BoardElementBase {
+  tool: 'rectangle';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+type BoardElement = LineElement | RectangleElement;
+
 // Interface for the raw DB row
-interface BoardLineRow {
+interface BoardElementRow {
   id: string;
   board_id: string;
   creator_id: string | null;
-  line_data: Omit<LineData, 'id' | 'creator_id'>; // The JSONB column itself
+  element_data: Omit<LineElement, 'id' | 'creator_id'> | Omit<RectangleElement, 'id' | 'creator_id'>;
   created_at: string;
 }
 
@@ -174,12 +192,13 @@ const BoardPage = () => { // No React.FC
   const [error, setError] = useState<string | null>(null);
 
   // Konva state
-  const [lines, setLines] = useState<LineData[]>([]); // Use LineData interface
+  const [elements, setElements] = useState<BoardElement[]>([]); // Use LineData interface
   const lastDist = useRef(0);
   const lastCenter = useRef<{ x: number; y: number } | null>(null);
   const isDrawing = useRef(false);
   const isPanning = useRef(false); // Ref to track panning state
   const panStartPoint = useRef<{ x: number; y: number } | null>(null); // Ref for pan start coords
+  const drawingStartPoint = useRef<{ x: number; y: number } | null>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
@@ -193,8 +212,8 @@ const BoardPage = () => { // No React.FC
   const [strokeWidth, setStrokeWidth] = useState(5);
 
   // --- Function to fetch initial lines ---
-  const fetchInitialLines = useCallback(async (currentBoardId: string) => { // Wrap in useCallback
-    console.log("Fetching initial lines for board:", currentBoardId);
+  const fetchInitialElements = useCallback(async (currentBoardId: string) => { // Wrap in useCallback
+    console.log("Fetching initial elements for board:", currentBoardId);
     try {
       const { data, error: selectError } = await supabase
         .from('board_lines')
@@ -203,18 +222,36 @@ const BoardPage = () => { // No React.FC
 
       if (selectError) throw selectError;
 
-      const initialLines = data?.map(line => ({
-        id: line.id,
-        creator_id: line.creator_id,
-        ...(line.line_data as Omit<LineData, 'id' | 'creator_id'>)
-      })) || [];
+      const initialElements: BoardElement[] = (data || [])
+        .map((row: any): BoardElement | null => {
+          const elementData = row.element_data; // Use alias
+          if (elementData && typeof elementData === 'object') {
+             if (elementData.tool && elementData.color && elementData.strokeWidth) {
+                const baseElement = {
+                  id: row.id,
+                  creator_id: row.creator_id,
+                  tool: elementData.tool,
+                  color: elementData.color,
+                  strokeWidth: elementData.strokeWidth,
+                };
+                if ((elementData.tool === 'pen' || elementData.tool === 'eraser') && Array.isArray(elementData.points) && elementData.points.length > 0) {
+                  return { ...baseElement, tool: elementData.tool, points: elementData.points };
+                } else if (elementData.tool === 'rectangle' && typeof elementData.x === 'number') {
+                  return { ...baseElement, tool: 'rectangle', x: elementData.x, y: elementData.y, width: elementData.width ?? 0, height: elementData.height ?? 0 };
+                }
+             }
+          }
+          console.warn("Skipping invalid element data from DB:", row);
+          return null;
+        })
+        .filter((element): element is BoardElement => element !== null);
 
-      console.log("Fetched initial lines:", initialLines);
-      setLines(initialLines);
+      console.log("Fetched initial elements:", initialElements);
+      setElements(initialElements);
 
     } catch (err: any) {
-      console.error("Error fetching initial lines:", err);
-      setError(prev => prev ? `${prev}\nFailed to fetch lines.` : 'Failed to fetch lines.');
+      console.error("Error fetching initial elements:", err);
+      setError(prev => prev ? `${prev}\nFailed to fetch elements.` : 'Failed to fetch elements.');
     }
   }, []); // Empty dependency array for fetchInitialLines
 
@@ -224,7 +261,7 @@ const BoardPage = () => { // No React.FC
       setLoading(true);
       setError(null);
       setBoard(null);
-      setLines([]); // Clear lines when fetching new board
+      setElements([]); // Clear lines when fetching new board
 
       try {
         let query = supabase.from('peachboards').select('*');
@@ -254,7 +291,7 @@ const BoardPage = () => { // No React.FC
           console.log("Board data fetched:", data);
           setBoard(data);
           // Fetch lines after board is confirmed
-          fetchInitialLines(data.id);
+          fetchInitialElements(data.id);
         } else {
            setError(`Board not found.`);
         }
@@ -268,7 +305,7 @@ const BoardPage = () => { // No React.FC
     };
 
     fetchBoardDetails();
-  }, [boardId, shareLinkId, fetchInitialLines]); // Add fetchInitialLines to dependency array
+  }, [boardId, shareLinkId, fetchInitialElements]); // Add fetchIntitialElements to dependency array
 
  // --- Stage Resize Effect ---
  useEffect(() => {
@@ -300,7 +337,7 @@ useEffect(() => {
       channel = supabase
         .channel(`board_${currentBoardId}`)
         // Use the correct type for the payload row
-        .on<BoardLineRow>(
+        .on<BoardElementRow>(
           'postgres_changes',
           {
             event: 'INSERT',
@@ -310,29 +347,39 @@ useEffect(() => {
           },
           (payload) => {
             console.log('Realtime INSERT received:', payload);
-            const newLineRecord = payload.new; // This is now correctly typed as BoardLineRow | undefined
-
-            // Check if the record and its line_data exist and are objects
-            if (newLineRecord && typeof newLineRecord.line_data === 'object' && newLineRecord.line_data !== null) {
-               // Construct the LineData object for state
-               const newLine: LineData = {
-                 id: newLineRecord.id, // Get ID from the row
-                 creator_id: newLineRecord.creator_id ?? undefined, // Convert null to undefined
-                 ...newLineRecord.line_data // Spread the properties from the JSONB column
-               };
-               console.log("Adding line from Realtime:", newLine);
-
-               // Add line only if it doesn't already exist (simple check by id)
-               setLines((prevLines) => {
-                 if (!prevLines.some(line => line.id === newLine.id)) {
-                   return [...prevLines, newLine];
-                 }
-                 console.log("Duplicate line detected, skipping add:", newLine.id);
-                 return prevLines;
-               });
-            } else {
-              console.warn("Received Realtime insert without valid line_data:", payload);
-            }
+            const newElementRecord = payload.new; // This is now correctly typed as BoardElementRow | undefined
+            const elementData = newElementRecord?.element_data; // Use alias
+            // Check if the record and its element_data exist and are objects
+            if (elementData && typeof elementData === 'object') {
+               // Construct the Element object for state
+              let newElement: BoardElement | null = null;
+              const baseElement = {
+                id: newElementRecord.id,
+                creator_id: newElementRecord.creator_id ?? undefined,
+                tool: elementData.tool,
+                color: elementData.color,
+                strokeWidth: elementData.strokeWidth,
+              };
+              // Bring in the lines
+              if ((elementData.tool === 'pen' || elementData.tool === 'eraser') && Array.isArray(elementData.points) && elementData.points.length > 0) {
+                newElement = { ...baseElement, tool: elementData.tool, points: elementData.points };
+              } 
+              // Bring in the rectangles
+              else if (elementData.tool === 'rectangle' && typeof elementData.x === 'number') {
+                newElement = { ...baseElement, tool: 'rectangle', x: elementData.x, y: elementData.y, width: elementData.width ?? 0, height: elementData.height ?? 0 };
+              }
+              
+              if (newElement) {
+                console.log("Adding element from Realtime:", newElement);
+                setElements((prevElements) => {
+                  if (!prevElements.some(el => el.id === newElement?.id)) {
+                    return [...prevElements, newElement];
+                  }
+                  console.log("Duplicate element detected, skipping add:", newElement.id);
+                  return prevElements;
+                });
+              } else { console.warn("Received Realtime insert with invalid element data:", payload); }
+            } else { console.warn("Received Realtime insert without valid element_data:", payload); }
           }
         )
         .subscribe((status, err) => {
@@ -355,47 +402,40 @@ useEffect(() => {
     };
   }, [board]); // Re-subscribe if the board changes
 
-  // --- Function to save the last drawn line ---
-  const saveLineToDb = useCallback(async () => { // Make async
+  // --- Function to save the last drawn element ---
+  const saveElementToDb = useCallback(async () => { // Make async
     if (!board?.id) return;
 
-    const lastLine = lines[lines.length - 1];
-    // Check points length >= 4 because a line needs at least two points (x1,y1,x2,y2)
-    if (!lastLine || !lastLine.points || lastLine.points.length < 4) {
-       console.log("Skipping save for invalid line (dot or single point):", lastLine);
-       // Optionally remove the dot from local state if desired
-       // setLines(prev => prev.slice(0, -1));
-       return;
+    const lastElement = elements[elements.length - 1];
+    if (!lastElement) return;
+
+    let elementDataForJsonb: Omit<LineElement, 'id' | 'creator_id'> | Omit<RectangleElement, 'id' | 'creator_id'> | null = null;
+
+    if (lastElement.tool === 'pen' || lastElement.tool === 'eraser') {
+       if (!lastElement.points || lastElement.points.length < 4) { console.log("Skipping save for invalid line:", lastElement); return; }
+       elementDataForJsonb = { points: lastElement.points, tool: lastElement.tool, color: lastElement.color, strokeWidth: lastElement.strokeWidth };
+    } else if (lastElement.tool === 'rectangle') {
+       if (!lastElement.width || !lastElement.height || lastElement.width === 0 || lastElement.height === 0) {
+          console.log("Skipping save for zero-size rectangle:", lastElement);
+          setElements(prev => prev.slice(0, -1)); return;
+       }
+       const x = lastElement.width < 0 ? lastElement.x + lastElement.width : lastElement.x;
+       const y = lastElement.height < 0 ? lastElement.y + lastElement.height : lastElement.y;
+       const width = Math.abs(lastElement.width);
+       const height = Math.abs(lastElement.height);
+       elementDataForJsonb = { x, y, width, height, tool: lastElement.tool, color: lastElement.color, strokeWidth: lastElement.strokeWidth };
     }
 
-    const lineDataToSave: Omit<LineData, 'id' | 'creator_id'> = {
-        points: lastLine.points,
-        tool: lastLine.tool,
-        color: lastLine.color,
-        strokeWidth: lastLine.strokeWidth,
-    };
-
-    console.log("Saving line to DB:", lineDataToSave);
-
+    if (!elementDataForJsonb) { console.warn("Could not prepare data for saving element:", lastElement); return; }
+    console.log("Saving element to DB:", elementDataForJsonb);
     try {
+        // Save to 'element_data' column
         const { error: insertError } = await supabase
-            .from('board_lines')
-            .insert({
-                board_id: board.id,
-                line_data: lineDataToSave,
-            });
-
+            .from('board_lines').insert({ board_id: board.id, element_data: elementDataForJsonb });
         if (insertError) throw insertError;
-
-        console.log("Line saved successfully.");
-        // Note: Realtime should add the line back with an ID.
-        // If duplicates appear, we might need more robust handling in the subscription callback.
-
-    } catch (err: any) {
-        console.error("Error saving line:", err);
-        setError(prev => prev ? `${prev}\nFailed to save drawing.` : 'Failed to save drawing.');
-    }
-  }, [board, lines]); // Depend on board and lines
+        console.log("Element saved successfully.");
+    } catch (err: any) { console.error("Error saving element:", err); setError(prev => prev ? `${prev}\nFailed to save element.` : 'Failed to save element.'); }
+  }, [board, elements]);
 
   // --- Konva Event Handlers (wrapped in useCallback) ---
   const handleMouseDown = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
@@ -407,13 +447,20 @@ useEffect(() => {
       isPanning.current = true;
       panStartPoint.current = stage.getPointerPosition(); // Use absolute position
       e.evt.preventDefault(); // Prevent default middle-click actions (like auto-scroll)
-    } else if (e.evt.button === 0) { // Left mouse button for drawing
+    } 
+    else if (e.evt.button === 0) { // Left mouse button for drawing
       isPanning.current = false; // Ensure not panning
       isDrawing.current = true;
       const pos = stage.getRelativePointerPosition(); if (!pos) return;
-      setLines((prevLines) => [...prevLines, { points: [pos.x, pos.y], tool, color: strokeColor, strokeWidth }]);
+      drawingStartPoint.current = pos;
+
+      if (tool === 'pen' || tool === 'eraser') {
+        setElements((prevElements) => [...prevElements, { tool, points: [pos.x, pos.y], color: strokeColor, strokeWidth } as LineElement]);
+      } else if (tool === 'rectangle') {
+        setElements((prevElements) => [...prevElements, { tool, x: pos.x, y: pos.y, width: 0, height: 0, color: strokeColor, strokeWidth } as RectangleElement]);
+      }
+      
     }
-    // Ignore right-click (button 2) for now, or add context menu logic later
   }, [tool, strokeColor, strokeWidth]); // Dependencies for drawing part
 
   const handleMouseMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
@@ -423,22 +470,26 @@ useEffect(() => {
     const point = stage.getRelativePointerPosition();
     if (!point) return;
     // Update state immutably
-    if(isDrawing.current){
-      setLines((prevLines) => {
-        const lastLine = prevLines[prevLines.length - 1];
-        // Ensure lastLine exists before creating a new object
-        if (lastLine?.points) { // Check points specifically
-          // Create a new line object with the updated points array
-          const updatedLine = {
-            ...lastLine,
-            points: lastLine.points.concat([point.x, point.y]),
+    else if (isDrawing.current) {
+      setElements((prevElements) => {
+        const currentElement = prevElements[prevElements.length - 1];
+        if (!currentElement) return prevElements;
+
+        if (currentElement.tool === 'pen' || currentElement.tool === 'eraser') {
+          const updatedElement = { ...currentElement, points: currentElement.points.concat([pos.x, pos.y]) };
+          return [...prevElements.slice(0, -1), updatedElement];
+        } else if (currentElement.tool === 'rectangle' && drawingStartPoint.current) {
+          const updatedElement = {
+            ...currentElement,
+            width: point.x - drawingStartPoint.current.x,
+            height: point.y - drawingStartPoint.current.y,
           };
-          return [...prevLines.slice(0, -1), updatedLine]; // Replace last line with updated one
+          return [...prevElements.slice(0, -1), updatedElement];
         }
-        return prevLines; // Should not happen if drawing started correctly
+        return prevElements;
       });
     }
-    if(isPanning.current && panStartPoint.current){
+    else if(isPanning.current && panStartPoint.current){
       const dx = point.x - panStartPoint.current.x;
       const dy = point.y - panStartPoint.current.y;
       const newPos ={
@@ -450,106 +501,73 @@ useEffect(() => {
   }, []);
 
   const handleMouseUp = useCallback(() => {
-    if(!isDrawing.current && !isPanning.current) return; // Only save if we were actually drawing
+    if(!isDrawing.current && !isPanning.current) return; 
     if (isDrawing.current){
       isDrawing.current = false;
-      saveLineToDb(); // Save the completed line
+      saveElementToDb(); // Only save if we were actually drawing
     }
     else if (isPanning.current){
       isPanning.current = false;
     }
-  }, [saveLineToDb]); // Depend on saveLineToDb
+  }, [saveElementToDb]); // Depend on saveLineToDb
 
   // --- Touch Event Handlers (wrapped in useCallback) ---
   const handleTouchStart = useCallback((e: Konva.KonvaEventObject<TouchEvent>) => {
-    e.evt.preventDefault();
-    const touches = e.evt.touches;
-    const stage = e.target.getStage();
-    if (!stage) return;
-
+    e.evt.preventDefault(); const touches = e.evt.touches; const stage = e.target.getStage(); if (!stage) return;
     if (touches.length === 1) {
-      isDrawing.current = true;
-      const pos = stage.getRelativePointerPosition();
-      if (!pos) return;
-      setLines((prevLines) => [
-        ...prevLines,
-        { points: [pos.x, pos.y], tool, color: strokeColor, strokeWidth },
-      ]);
+      isPanning.current = false; isDrawing.current = true;
+      const pos = stage.getRelativePointerPosition(); if (!pos) return;
+      drawingStartPoint.current = pos;
+      if (tool === 'pen' || tool === 'eraser') {
+        setElements((prevElements) => [...prevElements, { tool, points: [pos.x, pos.y], color: strokeColor, strokeWidth } as LineElement]);
+      } else if (tool === 'rectangle') {
+        setElements((prevElements) => [...prevElements, { tool, x: pos.x, y: pos.y, width: 0, height: 0, color: strokeColor, strokeWidth } as RectangleElement]);
+      }
     } else if (touches.length >= 2) {
-      isDrawing.current = false;
-      const touch1 = touches[0];
-      const touch2 = touches[1];
-      lastDist.current = getDistance(
-        { x: touch1.clientX, y: touch1.clientY },
-        { x: touch2.clientX, y: touch2.clientY }
-      );
-      lastCenter.current = getCenter(
-         { x: touch1.clientX, y: touch1.clientY },
-         { x: touch2.clientX, y: touch2.clientY }
-      );
+      isDrawing.current = false; isPanning.current = true;
+      const touch1 = touches[0]; const touch2 = touches[1];
+      lastDist.current = getDistance({ x: touch1.clientX, y: touch1.clientY }, { x: touch2.clientX, y: touch2.clientY });
+      lastCenter.current = getCenter({ x: touch1.clientX, y: touch1.clientY }, { x: touch2.clientX, y: touch2.clientY });
+      panStartPoint.current = lastCenter.current;
     }
   }, [tool, strokeColor, strokeWidth]);
 
 
   const handleTouchMove = useCallback((e: Konva.KonvaEventObject<TouchEvent>) => {
-    e.evt.preventDefault();
-    const touches = e.evt.touches;
-    const stage = e.target.getStage();
-     if (!stage) return;
-
+    e.evt.preventDefault(); const touches = e.evt.touches; const stage = e.target.getStage(); if (!stage) return;
     if (touches.length === 1 && isDrawing.current) {
-      const point = stage.getRelativePointerPosition();
-      if (!point) return;
-      // Update state immutably
-      setLines((prevLines) => {
-        const lastLine = prevLines[prevLines.length - 1];
-        // Ensure lastLine exists before creating a new object
-        if (lastLine?.points) { // Check points specifically
-           // Create a new line object with the updated points array
-           const updatedLine = {
-             ...lastLine,
-             points: lastLine.points.concat([point.x, point.y]),
-           };
-           return [...prevLines.slice(0, -1), updatedLine]; // Replace last line with updated one
+      const pos = stage.getRelativePointerPosition(); if (!pos) return;
+      setElements((prevElements) => {
+        const currentElement = prevElements[prevElements.length - 1];
+        if (!currentElement) return prevElements;
+        if (currentElement.tool === 'pen' || currentElement.tool === 'eraser') {
+          const updatedElement = { ...currentElement, points: currentElement.points.concat([pos.x, pos.y]) };
+          return [...prevElements.slice(0, -1), updatedElement];
+        } else if (currentElement.tool === 'rectangle' && drawingStartPoint.current) {
+          const updatedElement = { ...currentElement, width: pos.x - drawingStartPoint.current.x, height: pos.y - drawingStartPoint.current.y };
+          return [...prevElements.slice(0, -1), updatedElement];
         }
-        return prevLines; // Should not happen if drawing started correctly
+        return prevElements;
       });
-    } else if (touches.length >= 2 && lastCenter.current) {
-       isDrawing.current = false;
-       const touch1 = touches[0];
-       const touch2 = touches[1];
-       const newCenter = getCenter(
-         { x: touch1.clientX, y: touch1.clientY },
-         { x: touch2.clientX, y: touch2.clientY }
-       );
-       const newDist = getDistance(
-         { x: touch1.clientX, y: touch1.clientY },
-         { x: touch2.clientX, y: touch2.clientY }
-       );
-
-       if (lastDist.current === 0) {
-         lastDist.current = newDist;
-         return;
+    } else if (touches.length >= 2 && isPanning.current && panStartPoint.current) {
+       const touch1 = touches[0]; const touch2 = touches[1];
+       const newCenter = getCenter({ x: touch1.clientX, y: touch1.clientY }, { x: touch2.clientX, y: touch2.clientY });
+       const newDist = getDistance({ x: touch1.clientX, y: touch1.clientY }, { x: touch2.clientX, y: touch2.clientY });
+       const dx = newCenter.x - panStartPoint.current.x;
+       const dy = newCenter.y - panStartPoint.current.y;
+       let newPos = { x: stagePos.x + dx, y: stagePos.y + dy };
+       let newScale = stageScale;
+       if (lastDist.current > 0) {
+         const scaleChange = newDist / lastDist.current;
+         newScale = stageScale * scaleChange;
+         newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
+         const mousePointTo = { x: (newCenter.x - newPos.x) / stageScale, y: (newCenter.y - newPos.y) / stageScale };
+         newPos = { x: newCenter.x - mousePointTo.x * newScale, y: newCenter.y - mousePointTo.y * newScale };
        }
-
-       let scale = stage.scaleX() * (newDist / lastDist.current);
-       scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
-
-       const dx = newCenter.x - lastCenter.current.x;
-       const dy = newCenter.y - lastCenter.current.y;
-
-       const newPos = {
-         x: newCenter.x - ((newCenter.x - stage.x() - dx) / stage.scaleX()) * scale,
-         y: newCenter.y - ((newCenter.y - stage.y() - dy) / stage.scaleY()) * scale,
-       };
-
-       setStageScale(scale);
-       setStagePos(newPos);
-
-       lastDist.current = newDist;
-       lastCenter.current = newCenter;
+       setStageScale(newScale); setStagePos(newPos);
+       lastDist.current = newDist; panStartPoint.current = newCenter;
     }
-  }, [stageScale]);
+  }, [stageScale, stagePos]);
 
   const handleTouchEnd = useCallback((e: Konva.KonvaEventObject<TouchEvent>) => {
     e.evt.preventDefault();
@@ -558,9 +576,9 @@ useEffect(() => {
     lastDist.current = 0;
     lastCenter.current = null;
     if (wasDrawing) { // Only save if the touch end corresponds to a drawing action
-       saveLineToDb();
+       saveElementToDb();
     }
-  }, [saveLineToDb]); // Depend on saveLineToDb
+  }, [saveElementToDb]); // Depend on saveElementToDb
 
   // --- Share Button Handler ---
   const handleShareClick = useCallback(() => {
@@ -654,7 +672,7 @@ useEffect(() => {
   if (loading) {
     whiteboardContent = <StatusMessage>Loading board...</StatusMessage>;
   } else if (error) {
-    whiteboardContent = <StatusMessage isError={true}>{error}</StatusMessage>;
+    whiteboardContent = <StatusMessage $isError={true}>{error}</StatusMessage>;
   } else if (board) {
     whiteboardContent = (
       <Stage
@@ -711,18 +729,57 @@ useEffect(() => {
         </Layer>
         {/* Drawing Layer */}
         <Layer>
-          {lines.map((line, i) => (
-            <Line
-              key={`line-${i}`}
-              points={line.points}
-              stroke={line.color}
-              strokeWidth={line.strokeWidth}
-              tension={0.5}
-              lineCap="round"
-              lineJoin="round"
-              globalCompositeOperation={ line.tool === 'eraser' ? 'destination-out' : 'source-over' }
-            />
-          ))}
+          {elements.map((element, i) => {
+            // Basic validation for all elements
+            if (!element || typeof element.tool !== 'string' || typeof element.color !== 'string' || typeof element.strokeWidth !== 'number') {
+              console.warn("Skipping render for element with invalid base properties:", element);
+              return null;
+            }
+
+            if (element.tool === 'pen' || element.tool === 'eraser') {
+              // Line validation
+              if (!Array.isArray(element.points) || element.points.length < 2 || element.points.some(isNaN)) {
+                 console.warn("Skipping render for invalid line element:", element);
+                 return null;
+              }
+              return (
+                <Line
+                  key={element.id ?? `line-${i}`}
+                  points={element.points}
+                  stroke={element.color}
+                  strokeWidth={element.strokeWidth}
+                  tension={0.5}
+                  lineCap="round"
+                  lineJoin="round"
+                  globalCompositeOperation={ element.tool === 'eraser' ? 'destination-out' : 'source-over' }
+                />
+              );
+            } else if (element.tool === 'rectangle') {
+              // Rectangle validation
+              if (
+                typeof element.x !== 'number' || isNaN(element.x) ||
+                typeof element.y !== 'number' || isNaN(element.y) ||
+                typeof element.width !== 'number' || isNaN(element.width) ||
+                typeof element.height !== 'number' || isNaN(element.height) ||
+                element.width === 0 || element.height === 0 // Also skip zero-size
+              ) {
+                 console.warn("Skipping render for invalid rectangle element:", element);
+                 return null;
+              }
+              // Render Rect (adjusting for negative width/height)
+              return (
+                <Rect
+                  key={element.id ?? `rect-${i}`}
+                  x={element.width < 0 ? element.x + element.width : element.x}
+                  y={element.height < 0 ? element.y + element.height : element.y}
+                  width={Math.abs(element.width)}
+                  height={Math.abs(element.height)}
+                  stroke={element.color} strokeWidth={element.strokeWidth}
+                />
+              ); // Directly return the Rect component
+            }
+            return null;
+          })}
         </Layer>
       </Stage>
     );

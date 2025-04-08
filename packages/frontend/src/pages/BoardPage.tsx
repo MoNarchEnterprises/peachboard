@@ -6,6 +6,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js'; // Import type
 import { Stage, Layer, Line, Rect, Circle } from 'react-konva';
 import Konva from 'konva';
 import { FaPen, FaEraser, FaShareAlt, FaSquare, FaCircle } from 'react-icons/fa'; // Import Square icon (used for Rect & Circle for now)
+import logoSrc from '../assets/logoonly.png'; // Import the logo
 
 
 // Define an interface for the board object
@@ -78,8 +79,8 @@ const TopNavBar = styled.nav`
   justify-content: space-between;
   align-items: center;
   padding: 10px 20px;
-  background-color: #FFE5B4;
-  border-bottom: 1px solid #ffdab0;
+  background-color:rgb(183, 253, 200);
+  border-bottom: 1px solid #FFE5B4;
   flex-shrink: 0;
 `;
 
@@ -116,6 +117,13 @@ const DashboardLink = styled(Link)`
     background-color: rgba(0, 0, 0, 0.05);
     color: #A0522D;
   }
+`;
+
+// Styled component for the logo
+const LogoImage = styled.img`
+  height: 45px; // Adjust size as needed
+  width: auto;
+  margin-right: 10px; // Add some space between logo and title
 `;
 
 const TitleContainer = styled.div`
@@ -860,6 +868,7 @@ useEffect(() => {
     <BoardPageContainer>
       <TopNavBar>
          <TitleContainer>
+           <LogoImage src={logoSrc} alt="PeachBoard Logo" />
            <BoardTitle>{board ? board.name : 'PeachBoard'}</BoardTitle>
            {board && board.share_link_id && (
              <NavButton onClick={handleShareClick} title="Copy Share Link">

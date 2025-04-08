@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
 import styled from 'styled-components';
-import { nanoid } from 'nanoid'; // Import nanoid
+import { nanoid } from 'nanoid';
+import logo from '../assets/logoonly.png'; // Import the logo
 
 // Define an interface for the board object
 interface Board {
@@ -119,7 +120,11 @@ const DashboardPage: React.FC = () => {
   return (
     <DashboardContainer>
       <DashboardHeader>
-        <h1>Tutor Dashboard</h1>
+        {/* Title container with logo */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <img src={logo} alt="PeachBoard Logo" style={{ height: '45px', width: 'auto' }} /> {/* Increased height by 50% */}
+          <h1 style={{ margin: 0 }}>Tutor Dashboard</h1>
+        </div>
         <LogoutButton onClick={handleLogout}>Logout</LogoutButton>
       </DashboardHeader>
 
@@ -167,9 +172,11 @@ const DashboardPage: React.FC = () => {
 
 export default DashboardPage;
 
-// Styled Components
+// Styled Components - Updated Colors
 const DashboardContainer = styled.div`
-  padding: 20px;
+  padding: 30px; // Increased padding
+  max-width: 900px; // Limit width
+  margin: 40px auto; // Center container
 `;
 
 const DashboardHeader = styled.div`
@@ -181,24 +188,25 @@ const DashboardHeader = styled.div`
 
 const LogoutButton = styled.button`
   padding: 8px 15px;
-  background-color: #f0f0f0;
-  border: none;
-  border-radius: 4px;
+  background-color: #FFE5B4; // Peach background
+  color: #A0522D; // Darker brown text
+  border: 1px solid #ffdab0; // Lighter peach border
+  border-radius: 8px; // Match other buttons
   cursor: pointer;
 `;
 
 const CreateBoardSection = styled.div`
   margin-bottom: 30px;
   padding: 25px;
-  border: 1px solid #eee;
+  border: 1px solid #FFDAB9; // Peach border
   border-radius: 12px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
-  background: #f9f9f9;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06); // Slightly softer shadow
+  background: #FFF8DC; // Cornsilk background (like login messages)
 `;
 
 const SectionTitle = styled.h2`
   margin-bottom: 20px;
-  color: #333;
+  color: #8B4513; // SaddleBrown title
 `;
 
 const CreateBoardForm = styled.div`
@@ -211,20 +219,21 @@ const BoardNameInput = styled.input`
   padding: 12px 14px;
   flex-grow: 1;
   border-radius: 8px;
-  border: 1px solid #ccc;
+  border: 1px solid #FFDAB9; // Peach border
   font-size: 16px;
   transition: border-color 0.2s;
 
   &:focus {
-    border-color: #98FB98;
+    border-color: #FFA07A; // Darker peach focus
     outline: none;
+    box-shadow: 0 0 0 2px rgba(255, 160, 122, 0.2); // Subtle focus ring
   }
 `;
 
 const CreateBoardButton = styled.button`
   padding: 12px 20px;
-  background: #98FB98;
-  color: #333;
+  background: #FFDAB9; // Peach background
+  color: #444; // Darker text
   border: none;
   border-radius: 8px;
   cursor: pointer;
@@ -232,7 +241,7 @@ const CreateBoardButton = styled.button`
   transition: background-color 0.2s;
 
   &:hover {
-    background: #76c876;
+    background: #FFA07A; // Darker peach hover
   }
 
   &:disabled {
@@ -243,8 +252,12 @@ const CreateBoardButton = styled.button`
 `;
 
 const ErrorMessage = styled.p`
-  color: red;
-  margin-bottom: 10px;
+  color: #D9534F; // Softer red
+  background-color: #FADBD8; // Light pink background
+  border: 1px solid #F1948A; // Pinkish border
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin-bottom: 15px; // Increased margin
 `;
 
 const YourBoardsSection = styled.div`
@@ -259,14 +272,15 @@ const BoardList = styled.ul`
 
 const BoardListItem = styled.li`
   background-color: #fff;
-  border: 1px solid #eee;
+  border: 1px solid #FFDAB9; // Peach border
   border-radius: 8px;
   margin-bottom: 10px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
-  transition: box-shadow 0.2s ease-in-out;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04); // Softer shadow
+  transition: box-shadow 0.2s ease-in-out, border-color 0.2s ease-in-out;
 
   &:hover {
-    box-shadow: 0 3px 8px rgba(0,0,0,0.06);
+    border-color: #FFA07A; // Darker peach border on hover
+    box-shadow: 0 3px 8px rgba(0,0,0,0.08);
   }
 `;
 // Removed BoardItemContent, ShareLinkContainer, ShareLinkInput, CopyButton
@@ -280,6 +294,6 @@ const BoardLink = styled(Link)`
   font-weight: 500;
 
   &:hover {
-    color: #007bff; // Or your theme's link hover color
+    color: #D2691E; // Match login link hover
   }
 `;

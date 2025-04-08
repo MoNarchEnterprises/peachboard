@@ -3,10 +3,10 @@ import { useParams, Link } from 'react-router-dom';
 import styled from 'styled-components';
 import { supabase } from '../lib/supabaseClient';
 import type { RealtimeChannel } from '@supabase/supabase-js'; // Import type
-import { Stage, Layer, Line, Rect } from 'react-konva';
+import { Stage, Layer, Line, Rect, Circle } from 'react-konva';
 import Konva from 'konva';
-import { FaPen, FaEraser, FaShareAlt, FaBox, FaShapes, FaSquare } from 'react-icons/fa'; // Import icons + Share icon
-import { FaRectangleAd } from 'react-icons/fa6';
+import { FaPen, FaEraser, FaShareAlt, FaSquare, FaCircle } from 'react-icons/fa'; // Import Square icon (used for Rect & Circle for now)
+
 
 // Define an interface for the board object
 interface Board {
@@ -17,7 +17,7 @@ interface Board {
   share_link_id: string | null;
 }
 
-type Tool = 'pen' | 'rectangle'| 'eraser' ;
+type Tool = 'pen' | 'rectangle' | 'circle' | 'eraser'; // Add 'circle'
 
 // Base interface for all drawing elements on the PeachBoard
 interface BoardElementBase {
@@ -43,14 +43,22 @@ interface RectangleElement extends BoardElementBase {
   height: number;
 }
 
-type BoardElement = LineElement | RectangleElement;
+// Interface for Circle elements
+interface CircleElement extends BoardElementBase {
+  tool: 'circle';
+  x: number; // Center x
+  y: number; // Center y
+  radius: number;
+}
+
+type BoardElement = LineElement | RectangleElement | CircleElement; 
 
 // Interface for the raw DB row
 interface BoardElementRow {
   id: string;
   board_id: string;
   creator_id: string | null;
-  element_data: Omit<LineElement, 'id' | 'creator_id'> | Omit<RectangleElement, 'id' | 'creator_id'>;
+  element_data: Omit<LineElement, 'id' | 'creator_id'> | Omit<RectangleElement, 'id' | 'creator_id'> | Omit<CircleElement, 'id' | 'creator_id'>; 
   created_at: string;
 }
 
@@ -208,7 +216,7 @@ const BoardPage = () => { // No React.FC
   const [zoomInputValue, setZoomInputValue] = useState('100');
 
   // Tool state
-  const [tool, setTool] = useState<'pen' | 'rectangle' | 'eraser'>('pen');
+  const [tool, setTool] = useState<'pen' | 'rectangle' | 'circle' | 'eraser'>('pen');
   const [strokeColor, setStrokeColor] = useState('#df4b26');
   const [strokeWidth, setStrokeWidth] = useState(5);
 
@@ -218,14 +226,14 @@ const BoardPage = () => { // No React.FC
     try {
       const { data, error: selectError } = await supabase
         .from('board_lines')
-        .select('*')
+        .select('id, creator_id, element_data') 
         .eq('board_id', currentBoardId);
 
       if (selectError) throw selectError;
 
       const initialElements: BoardElement[] = (data || [])
         .map((row: any): BoardElement | null => {
-          const elementData = row.element_data; // Use alias
+          const elementData = row.element_data; 
           if (elementData && typeof elementData === 'object') {
              if (elementData.tool && elementData.color && elementData.strokeWidth) {
                 const baseElement = {
@@ -239,6 +247,8 @@ const BoardPage = () => { // No React.FC
                   return { ...baseElement, tool: elementData.tool, points: elementData.points };
                 } else if (elementData.tool === 'rectangle' && typeof elementData.x === 'number') {
                   return { ...baseElement, tool: 'rectangle', x: elementData.x, y: elementData.y, width: elementData.width ?? 0, height: elementData.height ?? 0 };
+                } else if (elementData.tool === 'circle' && typeof elementData.x === 'number'){
+                  return { ...baseElement, tool: 'circle', x: elementData.x, y: elementData.y, radius: elementData.radius ?? 0};
                 }
              }
           }
@@ -349,7 +359,7 @@ useEffect(() => {
           (payload) => {
             console.log('Realtime INSERT received:', payload);
             const newElementRecord = payload.new; // This is now correctly typed as BoardElementRow | undefined
-            const elementData = newElementRecord?.element_data; // Use alias
+            const elementData = newElementRecord?.element_data; 
             // Check if the record and its element_data exist and are objects
             if (elementData && typeof elementData === 'object') {
                // Construct the Element object for state
@@ -368,6 +378,10 @@ useEffect(() => {
               // Bring in the rectangles
               else if (elementData.tool === 'rectangle' && typeof elementData.x === 'number') {
                 newElement = { ...baseElement, tool: 'rectangle', x: elementData.x, y: elementData.y, width: elementData.width ?? 0, height: elementData.height ?? 0 };
+              }
+              // Bring in the circles
+              else if (elementData.tool === 'circle' && typeof elementData.x === 'number'){
+                newElement = { ...baseElement, tool: 'circle', x: elementData.x, y: elementData.y, radius: elementData.radius ?? 0};
               }
               
               if (newElement) {
@@ -410,12 +424,13 @@ useEffect(() => {
     const lastElement = elements[elements.length - 1];
     if (!lastElement) return;
 
-    let elementDataForJsonb: Omit<LineElement, 'id' | 'creator_id'> | Omit<RectangleElement, 'id' | 'creator_id'> | null = null;
+    let elementDataForJsonb: Omit<CircleElement, 'id' | 'creator_id'> | Omit<LineElement, 'id' | 'creator_id'> | Omit<RectangleElement, 'id' | 'creator_id'> | null = null;
 
     if (lastElement.tool === 'pen' || lastElement.tool === 'eraser') {
        if (!lastElement.points || lastElement.points.length < 4) { console.log("Skipping save for invalid line:", lastElement); return; }
        elementDataForJsonb = { points: lastElement.points, tool: lastElement.tool, color: lastElement.color, strokeWidth: lastElement.strokeWidth };
-    } else if (lastElement.tool === 'rectangle') {
+    } 
+    else if (lastElement.tool === 'rectangle') {
        if (!lastElement.width || !lastElement.height || lastElement.width === 0 || lastElement.height === 0) {
           console.log("Skipping save for zero-size rectangle:", lastElement);
           setElements(prev => prev.slice(0, -1)); return;
@@ -426,13 +441,24 @@ useEffect(() => {
        const height = Math.abs(lastElement.height);
        elementDataForJsonb = { x, y, width, height, tool: lastElement.tool, color: lastElement.color, strokeWidth: lastElement.strokeWidth };
     }
+    else if (lastElement.tool === 'circle'){
+      if (!lastElement.radius || lastElement.radius === 0){
+        console.log("Skipping for 0 radius circles", lastElement);
+        setElements(prev => prev.slice(0,-1));
+        return;
+      }
+      const x = lastElement.x; 
+      const y = lastElement.y;
+      const radius = Math.abs(lastElement.radius);
+      elementDataForJsonb = {x, y, radius, tool: lastElement.tool, color: lastElement.color, strokeWidth: lastElement.strokeWidth};
+    }
 
     if (!elementDataForJsonb) { console.warn("Could not prepare data for saving element:", lastElement); return; }
     console.log("Saving element to DB:", elementDataForJsonb);
     try {
         // Save to 'element_data' column
         const { error: insertError } = await supabase
-            .from('board_lines').insert({ board_id: board.id, element_data: elementDataForJsonb });
+            .from('board_lines').insert({ board_id: board.id, element_data: elementDataForJsonb }); // Use element_data
         if (insertError) throw insertError;
         console.log("Element saved successfully.");
     } catch (err: any) { console.error("Error saving element:", err); setError(prev => prev ? `${prev}\nFailed to save element.` : 'Failed to save element.'); }
@@ -459,6 +485,9 @@ useEffect(() => {
         setElements((prevElements) => [...prevElements, { tool, points: [pos.x, pos.y], color: strokeColor, strokeWidth } as LineElement]);
       } else if (tool === 'rectangle') {
         setElements((prevElements) => [...prevElements, { tool, x: pos.x, y: pos.y, width: 0, height: 0, color: strokeColor, strokeWidth } as RectangleElement]);
+      } else if (tool === 'circle') {
+        // Add temporary circle
+        setElements((prevElements) => [...prevElements, { tool, x: pos.x, y: pos.y, radius: 0, color: strokeColor, strokeWidth } as CircleElement]);
       }
       
     }
@@ -486,7 +515,15 @@ useEffect(() => {
             height: point.y - drawingStartPoint.current.y,
           };
           return [...prevElements.slice(0, -1), updatedElement];
+        } else if (currentElement.tool === 'circle' && drawingStartPoint.current) {
+           // Update temporary circle radius
+           const dx = point.x - drawingStartPoint.current.x; // Use point here
+           const dy = point.y - drawingStartPoint.current.y; // Use point here
+           const radius = Math.sqrt(dx * dx + dy * dy);
+           const updatedElement = { ...currentElement, radius };
+           return [...prevElements.slice(0, -1), updatedElement];
         }
+        
         return prevElements;
       });
     }
@@ -520,9 +557,11 @@ useEffect(() => {
       const pos = stage.getRelativePointerPosition(); if (!pos) return;
       drawingStartPoint.current = pos;
       if (tool === 'pen' || tool === 'eraser') {
-        setElements((prevElements) => [...prevElements, { tool, points: [pos.x, pos.y], color: strokeColor, strokeWidth } as LineElement]);
+        setElements((prevElements) => [...prevElements, { tool, points: [pos.x, pos.y], color: strokeColor, strokeWidth: strokeWidth } as LineElement]);
       } else if (tool === 'rectangle') {
-        setElements((prevElements) => [...prevElements, { tool, x: pos.x, y: pos.y, width: 0, height: 0, color: strokeColor, strokeWidth } as RectangleElement]);
+        setElements((prevElements) => [...prevElements, { tool, x: pos.x, y: pos.y, width: 0, height: 0, color: strokeColor, strokeWidth: strokeWidth } as RectangleElement]);
+      } else if (tool === 'circle'){
+        setElements((prevElements) => [...prevElements, { tool, x: pos.x, y: pos.y, radius: 0, color: strokeColor, strokeWidth: strokeWidth} as CircleElement]);
       }
     } else if (touches.length >= 2) {
       isDrawing.current = false; isPanning.current = true;
@@ -547,6 +586,15 @@ useEffect(() => {
         } else if (currentElement.tool === 'rectangle' && drawingStartPoint.current) {
           const updatedElement = { ...currentElement, width: pos.x - drawingStartPoint.current.x, height: pos.y - drawingStartPoint.current.y };
           return [...prevElements.slice(0, -1), updatedElement];
+        } else if (currentElement.tool === 'circle' && drawingStartPoint.current){
+          const updatedElement = { ...currentElement, radius: getDistance(drawingStartPoint.current, pos)};
+          return [...prevElements.slice(0,-1), updatedElement];
+        } else if (currentElement.tool === 'circle' && drawingStartPoint.current) { // Add circle logic here
+           const dx = pos.x - drawingStartPoint.current.x;
+           const dy = pos.y - drawingStartPoint.current.y;
+           const radius = Math.sqrt(dx * dx + dy * dy);
+           const updatedElement = { ...currentElement, radius };
+           return [...prevElements.slice(0, -1), updatedElement];
         }
         return prevElements;
       });
@@ -778,6 +826,25 @@ useEffect(() => {
                   stroke={element.color} strokeWidth={element.strokeWidth}
                 />
               ); // Directly return the Rect component
+            } else if (element.tool === 'circle'){
+              if (
+                typeof element.x !== 'number' || isNaN(element.x) ||
+                typeof element.y !== 'number' || isNaN(element.y) ||
+                typeof element.radius != 'number' || isNaN(element.radius) || element.radius === 0
+              ){
+                console.warn("Skipping render for invalid circle element:", element);
+                return null;
+              }
+              return(
+                <Circle
+                  key={element.id ?? `circle-${i}`}
+                  x={element.x}
+                  y={element.y}
+                  radius={element.radius}
+                  stroke={element.color}
+                  strokeWidth={element.strokeWidth}
+                />
+              );
             }
             return null;
           })}
@@ -806,6 +873,8 @@ useEffect(() => {
         <label htmlFor="tool-pen">Tool:</label>
         <button id="tool-pen" onClick={() => setTool('pen')} className={tool === 'pen' ? 'active' : ''} title="Pen" > <FaPen /> </button>
         <button id="tool-rectangle" onClick={() => setTool('rectangle')} className={tool === 'rectangle'?'active':''} title="Rectangle"><FaSquare /></button>
+        {/* Using FaSquare as placeholder for Circle */}
+        <button id="tool-circle" onClick={() => setTool('circle')} className={tool === 'circle' ? 'active' : ''} title="Circle" > <FaCircle /> </button>
         <button id="tool-eraser" onClick={() => setTool('eraser')} className={tool === 'eraser' ? 'active' : ''} title="Eraser" > <FaEraser /> </button>
         <label htmlFor="color-picker">Color:</label>
         <input type="color" id="color-picker" value={strokeColor} onChange={(e) => setStrokeColor(e.target.value)} disabled={tool === 'eraser'} />

@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
 import styled from 'styled-components';
 import { nanoid } from 'nanoid';
+import { FaTrash, FaPencilAlt } from 'react-icons/fa'; // Import icons
 import logo from '../assets/logoonly.png'; // Import the logo
 
 // Define an interface for the board object
@@ -23,6 +24,10 @@ const DashboardPage: React.FC = () => {
   const [boards, setBoards] = useState<Board[]>([]);
   const [fetchLoading, setFetchLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null); // Track loading state for delete/rename actions (board id)
+  const [actionError, setActionError] = useState<string | null>(null); // Error for delete/rename actions
+  const [renamingBoardId, setRenamingBoardId] = useState<string | null>(null); // Track which board is being renamed
+  const [renameValue, setRenameValue] = useState<string>(''); // Input value for renaming
 
   // Function to fetch boards for the current user
   const fetchBoards = async (currentUserId: string) => {
@@ -117,6 +122,87 @@ const DashboardPage: React.FC = () => {
     }
   };
 
+  const handleDeleteBoard = async (boardId: string, boardName: string) => {
+    if (!window.confirm(`Are you sure you want to delete the board "${boardName}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    setActionLoading(boardId); // Set loading state for this specific board
+    setActionError(null);
+
+    try {
+      const { error: deleteError } = await supabase
+        .from('peachboards')
+        .delete()
+        .match({ id: boardId });
+
+      if (deleteError) {
+        throw deleteError;
+      }
+
+      console.log(`Board ${boardId} deleted successfully.`);
+      // Refresh the list by filtering out the deleted board locally
+      // or re-fetching if preferred (re-fetching is simpler here)
+      if (userId) {
+        fetchBoards(userId);
+      }
+    } catch (err: any) {
+      console.error('Error deleting board:', err);
+      setActionError(`Failed to delete board: ${err.message || 'Unknown error'}`);
+    } finally {
+      setActionLoading(null); // Clear loading state
+    }
+  };
+
+  const handleStartRename = (boardId: string, currentName: string) => {
+    setRenamingBoardId(boardId);
+    setRenameValue(currentName);
+    setActionError(null); // Clear previous errors
+  };
+
+  const handleCancelRename = () => {
+    setRenamingBoardId(null);
+    setRenameValue('');
+  };
+
+  const handleConfirmRename = async () => {
+    if (!renamingBoardId || !renameValue.trim()) {
+      setActionError('Board name cannot be empty.');
+      return;
+    }
+    if (renameValue.trim().length > 100) { // Optional: Add length validation
+        setActionError('Board name cannot exceed 100 characters.');
+        return;
+    }
+
+
+    setActionLoading(renamingBoardId); // Use the same loading state, indicate action on this board
+    setActionError(null);
+
+    try {
+      const { error: updateError } = await supabase
+        .from('peachboards')
+        .update({ name: renameValue.trim() })
+        .match({ id: renamingBoardId });
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      console.log(`Board ${renamingBoardId} renamed successfully.`);
+      setRenamingBoardId(null); // Exit rename mode
+      setRenameValue('');
+      if (userId) {
+        fetchBoards(userId); // Refresh the list
+      }
+    } catch (err: any) {
+      console.error('Error renaming board:', err);
+      setActionError(`Failed to rename board: ${err.message || 'Unknown error'}`);
+    } finally {
+      setActionLoading(null); // Clear loading state
+    }
+  };
+
   return (
     <DashboardContainer>
       <DashboardHeader>
@@ -149,6 +235,7 @@ const DashboardPage: React.FC = () => {
         <SectionTitle>Your PeachBoards</SectionTitle>
         {fetchLoading && <p>Loading boards...</p>}
         {fetchError && <ErrorMessage>{fetchError}</ErrorMessage>}
+        {actionError && <ErrorMessage>{actionError}</ErrorMessage>} {/* Display action errors */}
         {!fetchLoading && !fetchError && (
           boards.length === 0 ? (
             <p>You haven't created any boards yet.</p>
@@ -156,11 +243,62 @@ const DashboardPage: React.FC = () => {
             <BoardList>
               {boards.map((board) => (
                 <BoardListItem key={board.id}>
-                   {/* Simplified: Just the link to the board */}
-                   <BoardLink to={`/board/${board.id}`}>
-                     {board.name}
-                   </BoardLink>
-                 </BoardListItem>
+                  <> {/* Add explicit fragment */}
+                    {renamingBoardId === board.id ? (
+                    // Renaming UI
+                    <BoardItemContent>
+                      <RenameInput
+                        type="text"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        autoFocus
+                        onKeyDown={(e) => e.key === 'Enter' && handleConfirmRename()} // Allow Enter to save
+                        disabled={actionLoading === board.id}
+                      />
+                      <BoardActions>
+                        <ActionButton
+                          onClick={handleConfirmRename}
+                          disabled={actionLoading === board.id || !renameValue.trim()}
+                          title="Save Name"
+                          style={{ backgroundColor: '#e8f5e9', borderColor: '#c8e6c9', color: '#388e3c' }} // Greenish save button
+                        >
+                          {actionLoading === board.id ? 'Saving...' : 'Save'}
+                        </ActionButton>
+                        <ActionButton
+                          onClick={handleCancelRename}
+                          disabled={actionLoading === board.id}
+                          title="Cancel Rename"
+                        >
+                          Cancel
+                        </ActionButton>
+                      </BoardActions>
+                    </BoardItemContent>
+                  ) : (
+                    // Default Display UI
+                    <BoardItemContent>
+                      <BoardLink to={`/board/${board.id}`} title={board.name}> {/* Add title for long names */}
+                        {board.name}
+                      </BoardLink>
+                      <BoardActions>
+                        <ActionButton
+                          onClick={() => handleStartRename(board.id, board.name)}
+                          disabled={!!renamingBoardId || actionLoading === board.id} // Disable if another rename is active or action is loading
+                          title="Rename Board"
+                        >
+                          <FaPencilAlt />
+                        </ActionButton>
+                        <ActionButton
+                          onClick={() => handleDeleteBoard(board.id, board.name)}
+                          disabled={!!renamingBoardId || actionLoading === board.id} // Disable if rename is active or action is loading
+                          title="Delete Board"
+                        >
+                          {actionLoading === board.id ? '...' : <FaTrash />}
+                        </ActionButton>
+                     </BoardActions>
+                   </BoardItemContent>
+                   )}
+                 </> {/* Close explicit fragment */}
+                </BoardListItem>
               ))}
             </BoardList>
           )
@@ -283,11 +421,105 @@ const BoardListItem = styled.li`
     box-shadow: 0 3px 8px rgba(0,0,0,0.08);
   }
 `;
-// Removed BoardItemContent, ShareLinkContainer, ShareLinkInput, CopyButton
+
+// Style for the rename input field
+const RenameInput = styled.input`
+ padding: 8px 10px;
+ flex-grow: 1;
+ margin-right: 10px;
+ border-radius: 5px;
+ border: 1px solid #ccc;
+ font-size: 1.1em; /* Slightly larger to match link */
+
+  &:focus {
+    border-color: #FFA07A; // Darker peach focus
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(255, 160, 122, 0.2); // Subtle focus ring
+  }
+`;
+
+// Add styles for the content wrapper and actions container
+const BoardItemContent = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 20px; /* Padding moved here from BoardLink */
+`;
+
+const BoardActions = styled.div`
+  display: flex;
+  gap: 10px;
+`;
+
+// Action Button Style for Icons
+const ActionButton = styled.button`
+  padding: 0; /* Remove padding */
+  width: 30px; /* Fixed width */
+  height: 30px; /* Fixed height */
+  font-size: 1em; /* Adjust icon size if needed */
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex; /* Center icon */
+  align-items: center; /* Center icon */
+  justify-content: center; /* Center icon */
+  background-color: #f8f8f8;
+  border: 1px solid #ddd;
+  color: #555;
+  transition: background-color 0.2s, border-color 0.2s;
+
+  &:hover:not(:disabled) {
+    background-color: #eee;
+    border-color: #ccc;
+  }
+
+  &:disabled {
+    background-color: #eee;
+    color: #aaa;
+    cursor: not-allowed;
+  }
+
+  /* Specific styling for delete button */
+  &[title="Delete Board"]:not(:disabled) {
+     background-color: #fff0f0;
+     border-color: #fcc;
+     color: #d9534f;
+  }
+   &[title="Delete Board"]:hover:not(:disabled) {
+     background-color: #fadde1;
+     border-color: #f9bdbb;
+   }
+
+   /* Specific styling for rename button */
+    &[title="Rename Board"]:not(:disabled) {
+      background-color: #f0f4ff; /* Light blue background */
+      border-color: #cce;
+      color: #4a69bd; /* Blue icon */
+    }
+    &[title="Rename Board"]:hover:not(:disabled) {
+      background-color: #e1e8ff;
+      border-color: #bbc;
+    }
+
+    /* Styling for Save and Cancel buttons during rename */
+    &[title="Save Name"] {
+        /* Already styled inline, but could add hover here */
+    }
+     &[title="Cancel Rename"]:not(:disabled) {
+        background-color: #f5f5f5;
+        border-color: #ddd;
+        color: #777;
+     }
+     &[title="Cancel Rename"]:hover:not(:disabled) {
+        background-color: #eee;
+        border-color: #ccc;
+     }
+`;
 
 const BoardLink = styled(Link)`
-  display: block; /* Make link take full width of list item */
-  padding: 15px 20px; /* Add padding back to the link */
+  /* display: block; */ /* No longer needed as padding is on parent */
+  /* padding: 15px 20px; */ /* Padding moved to BoardItemContent */
+  flex-grow: 1; /* Allow link to take available space */
+  margin-right: 15px; /* Add some space between link and buttons */
   text-decoration: none;
   color: #333;
   font-size: 1.2em;
